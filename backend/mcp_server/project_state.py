@@ -1,0 +1,716 @@
+"""Project state management for the MCP server.
+
+Uses the EXACT same JSON schema as the frontend TypeScript interfaces
+(Project, Asset, Timeline, Track, TimelineClip, SubtitleClip, TextOverlayStyle)
+so that MCP-created projects can be imported directly into the LTX Desktop UI
+via GET /api/mcp/projects/{id}.
+
+Key conventions (matching the frontend):
+- IDs:        "project-{unix_ms}-{random9}", "asset-{unix_ms}-{random9}", etc.
+- Timestamps: Unix milliseconds (int), matching JS Date.now()
+- file URLs:  Path.as_uri() → "file:///..." — frontend's recoverAssetUrls() handles these
+"""
+
+from __future__ import annotations
+
+import json
+import threading
+import time
+import uuid
+from pathlib import Path
+from typing import Any, Literal, cast
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class SchemaModel(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _new_id(prefix: str) -> str:
+    return f"{prefix}-{_now_ms()}-{uuid.uuid4().hex[:9]}"
+
+
+# ── Sub-models (matching frontend types/project.ts exactly) ───────────────────
+
+class ClipTransition(SchemaModel):
+    type: str = "none"       # none|dissolve|fade-to-black|fade-to-white|wipe-left|wipe-right|wipe-up|wipe-down
+    duration: float = 0.0   # seconds
+
+
+class ColorCorrection(SchemaModel):
+    brightness: float = 0.0
+    contrast: float = 0.0
+    saturation: float = 0.0
+    temperature: float = 0.0
+    tint: float = 0.0
+    exposure: float = 0.0
+    highlights: float = 0.0
+    shadows: float = 0.0
+
+
+class ClipEffect(SchemaModel):
+    id: str
+    type: str        # blur|sharpen|glow|vignette|grain|lut-cinematic|lut-vintage|lut-bw|lut-cool|lut-warm|lut-muted|lut-vivid
+    enabled: bool = True
+    params: dict[str, float] = Field(default_factory=dict)
+
+
+class KenBurnsKeyframe(SchemaModel):
+    scale: float
+    focusX: float  # 0–100 (% of frame width), 50 = center
+    focusY: float  # 0–100 (% of frame height), 50 = center
+
+
+class KenBurnsMotion(SchemaModel):
+    type: Literal["ken_burns"] = "ken_burns"
+    start: KenBurnsKeyframe
+    end: KenBurnsKeyframe
+    easing: Literal["linear", "easeInOut"] | None = None
+
+
+class TextOverlayStyle(SchemaModel):
+    text: str = "Text"
+    fontFamily: str = "Inter, Arial, sans-serif"
+    fontSize: float = 64.0
+    fontWeight: str = "bold"
+    fontStyle: str = "normal"
+    color: str = "#FFFFFF"
+    backgroundColor: str = "transparent"
+    textAlign: str = "center"
+    positionX: float = 50.0   # 0-100% of frame width
+    positionY: float = 50.0   # 0-100% of frame height
+    strokeColor: str = "transparent"
+    strokeWidth: float = 0.0
+    shadowColor: str = "rgba(0,0,0,0.5)"
+    shadowBlur: float = 4.0
+    shadowOffsetX: float = 2.0
+    shadowOffsetY: float = 2.0
+    letterSpacing: float = 0.0
+    lineHeight: float = 1.2
+    maxWidth: float = 80.0    # % of frame
+    padding: float = 0.0
+    borderRadius: float = 0.0
+    opacity: float = 100.0
+
+
+class SubtitleStyle(SchemaModel):
+    fontSize: float = 32.0
+    fontFamily: str = "sans-serif"
+    fontWeight: str = "normal"   # normal|bold
+    color: str = "#FFFFFF"
+    backgroundColor: str = "transparent"
+    position: str = "bottom"     # bottom|top|center
+    italic: bool = False
+
+
+class SubtitleClip(SchemaModel):
+    id: str
+    text: str
+    startTime: float
+    endTime: float
+    trackIndex: int = 0
+    style: SubtitleStyle | None = None
+
+
+class Track(SchemaModel):
+    id: str
+    name: str
+    muted: bool = False
+    locked: bool = False
+    kind: str | None = None   # "video" | "audio" | None
+    type: str | None = None   # "default" | "subtitle" | None
+
+
+class Asset(SchemaModel):
+    id: str
+    type: str   # "video" | "image" | "audio"
+    path: str   # absolute filesystem path
+    url: str    # file:///... URL (not blob:)
+    prompt: str = ""
+    resolution: str = ""
+    duration: float | None = None
+    createdAt: int
+    thumbnail: str | None = None
+
+
+class TimelineClip(SchemaModel):
+    id: str
+    assetId: str | None
+    type: str   # "video" | "image" | "audio" | "text"
+    startTime: float    # position on timeline (seconds)
+    duration: float     # duration on timeline (seconds)
+    trimStart: float    # in-point in source media (seconds)
+    trimEnd: float      # out-point in source media (seconds)
+    speed: float = 1.0
+    reversed: bool = False
+    muted: bool = False
+    volume: float = 1.0
+    trackIndex: int = 0
+    asset: Asset | None = None   # embedded copy for the frontend
+    flipH: bool = False
+    flipV: bool = False
+    transitionIn: ClipTransition = Field(default_factory=ClipTransition)
+    transitionOut: ClipTransition = Field(default_factory=ClipTransition)
+    colorCorrection: ColorCorrection = Field(default_factory=ColorCorrection)
+    opacity: float = 100.0
+    effects: list[ClipEffect] = Field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
+    textStyle: TextOverlayStyle | None = None   # only for type="text"
+    motion: KenBurnsMotion | None = None
+
+
+def _default_tracks() -> list[Track]:
+    return [
+        Track(id="track-v1", name="V1", kind="video"),
+        Track(id="track-v2", name="V2", kind="video"),
+        Track(id="track-v3", name="V3", kind="video"),
+        Track(id="track-a1", name="A1", kind="audio"),
+        Track(id="track-a2", name="A2", kind="audio"),
+    ]
+
+
+class Timeline(SchemaModel):
+    id: str
+    name: str
+    createdAt: int
+    tracks: list[Track] = Field(default_factory=_default_tracks)
+    clips: list[TimelineClip] = Field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
+    subtitles: list[SubtitleClip] = Field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
+
+
+class Project(SchemaModel):
+    id: str
+    name: str
+    createdAt: int
+    updatedAt: int
+    assets: list[Asset] = Field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
+    timelines: list[Timeline] = Field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
+    activeTimelineId: str | None = None
+
+
+# ── ProjectStore ──────────────────────────────────────────────────────────────
+
+class ProjectStore:
+    """Thread-safe, JSON-persisted project state manager.
+
+    Maintains one "active" project in memory and syncs it to disk on every
+    mutation so state survives crashes and is discoverable by the frontend
+    via GET /api/mcp/projects.
+    """
+
+    def __init__(self, state_dir: Path) -> None:
+        self._state_dir = state_dir
+        self._state_dir.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.RLock()
+        self._active: Project | None = None
+
+    # ── Internal helpers ──────────────────────────────────────────────────────
+
+    def _project_file(self, project_id: str) -> Path:
+        return self._state_dir / f"{project_id}.json"
+
+    def _persist(self) -> None:
+        """Write active project to disk. Caller must hold _lock."""
+        if self._active is None:
+            return
+        self._project_file(self._active.id).write_text(
+            self._active.model_dump_json(indent=2, exclude_none=False),
+            encoding="utf-8",
+        )
+
+    def _touch(self) -> None:
+        """Update updatedAt and persist. Caller must hold _lock."""
+        if self._active:
+            self._active.updatedAt = _now_ms()
+        self._persist()
+
+    def _find_clip(self, clip_id: str) -> TimelineClip:
+        for clip in self._active_timeline().clips:
+            if clip.id == clip_id:
+                return clip
+        raise KeyError(f"Clip not found: {clip_id}")
+
+    def _active_timeline(self) -> Timeline:
+        p = self.get_active()
+        if not p.timelines:
+            raise RuntimeError("Project has no timelines")
+        for tl in p.timelines:
+            if tl.id == p.activeTimelineId:
+                return tl
+        return p.timelines[0]
+
+    # ── Project lifecycle ─────────────────────────────────────────────────────
+
+    def create_project(self, name: str) -> Project:
+        with self._lock:
+            now = _now_ms()
+            timeline = Timeline(id=_new_id("timeline"), name="Timeline 1", createdAt=now)
+            self._active = Project(
+                id=_new_id("project"),
+                name=name,
+                createdAt=now,
+                updatedAt=now,
+                timelines=[timeline],
+                activeTimelineId=timeline.id,
+            )
+            self._persist()
+            return self._active
+
+    def open_project(self, project_id: str) -> Project:
+        with self._lock:
+            path = self._project_file(project_id)
+            if not path.exists():
+                raise FileNotFoundError(f"MCP project not found: {project_id}")
+            self._active = Project.model_validate_json(path.read_text(encoding="utf-8"))
+            return self._active
+
+    def upsert_project(self, project: Project) -> Project:
+        """Replace the stored project JSON with the provided state.
+
+        Used for keeping the MCP store in sync with frontend edits.
+        """
+        with self._lock:
+            project.updatedAt = _now_ms()
+            self._active = project
+            self._persist()
+            return self._active
+
+    def get_active(self) -> Project:
+        with self._lock:
+            if self._active is None:
+                raise RuntimeError(
+                    "No active project. Call create_project or open_project first."
+                )
+            return self._active
+
+    def save(self) -> Project:
+        with self._lock:
+            self._touch()
+            return self.get_active()
+
+    def list_projects(self) -> list[dict[str, Any]]:
+        summaries: list[dict[str, Any]] = []
+        for path in sorted(self._state_dir.glob("*.json")):
+            try:
+                data_raw: Any = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(data_raw, dict):
+                    continue
+                data = cast(dict[str, Any], data_raw)
+                summaries.append({
+                    "id": data.get("id"),
+                    "name": data.get("name"),
+                    "createdAt": data.get("createdAt"),
+                    "updatedAt": data.get("updatedAt"),
+                    "assetCount": len(data.get("assets", [])),
+                    "clipCount": sum(
+                        len(tl.get("clips", []))
+                        for tl in data.get("timelines", [])
+                    ),
+                })
+            except Exception:
+                pass
+        return summaries
+
+    # ── Asset management ──────────────────────────────────────────────────────
+
+    def add_asset(
+        self,
+        file_path: str,
+        media_type: str,
+        duration: float | None,
+        resolution: str,
+        prompt: str = "",
+    ) -> Asset:
+        with self._lock:
+            resolved = Path(file_path).resolve()
+            asset = Asset(
+                id=_new_id("asset"),
+                type=media_type,
+                path=str(resolved),
+                url=resolved.as_uri(),
+                prompt=prompt,
+                resolution=resolution,
+                duration=duration,
+                createdAt=_now_ms(),
+            )
+            self.get_active().assets.append(asset)
+            self._touch()
+            return asset
+
+    def get_asset(self, asset_id: str) -> Asset:
+        with self._lock:
+            for a in self.get_active().assets:
+                if a.id == asset_id:
+                    return a
+            raise KeyError(f"Asset not found: {asset_id}")
+
+    # ── Clip management ───────────────────────────────────────────────────────
+
+    def add_clip(
+        self,
+        asset_id: str,
+        track_index: int,
+        start_time: float,
+        trim_start: float,
+        trim_end: float,
+    ) -> TimelineClip:
+        with self._lock:
+            asset = self.get_asset(asset_id)
+            clip = TimelineClip(
+                id=_new_id("clip"),
+                assetId=asset_id,
+                type=asset.type,
+                startTime=start_time,
+                duration=trim_end - trim_start,
+                trimStart=trim_start,
+                trimEnd=trim_end,
+                trackIndex=track_index,
+                asset=asset,
+            )
+            self._active_timeline().clips.append(clip)
+            self._touch()
+            return clip
+
+    def remove_clip(self, clip_id: str) -> None:
+        with self._lock:
+            tl = self._active_timeline()
+            before = len(tl.clips)
+            tl.clips = [c for c in tl.clips if c.id != clip_id]
+            if len(tl.clips) == before:
+                raise KeyError(f"Clip not found: {clip_id}")
+            self._touch()
+
+    def move_clip(self, clip_id: str, track_index: int, start_time: float) -> TimelineClip:
+        with self._lock:
+            clip = self._find_clip(clip_id)
+            clip.trackIndex = track_index
+            clip.startTime = start_time
+            self._touch()
+            return clip
+
+    def trim_clip(self, clip_id: str, trim_start: float, trim_end: float) -> TimelineClip:
+        with self._lock:
+            clip = self._find_clip(clip_id)
+            clip.trimStart = trim_start
+            clip.trimEnd = trim_end
+            clip.duration = trim_end - trim_start
+            self._touch()
+            return clip
+
+    def split_clip(self, clip_id: str, split_at_seconds: float) -> tuple[TimelineClip, TimelineClip]:
+        with self._lock:
+            tl = self._active_timeline()
+            for i, clip in enumerate(tl.clips):
+                if clip.id != clip_id:
+                    continue
+                asset_split = clip.trimStart + (split_at_seconds - clip.startTime)
+                if not (clip.trimStart < asset_split < clip.trimEnd):
+                    raise ValueError(
+                        f"split_at_seconds {split_at_seconds} is outside clip bounds "
+                        f"[{clip.startTime:.2f}, {clip.startTime + clip.duration:.2f}]"
+                    )
+                left = TimelineClip(
+                    id=_new_id("clip"), assetId=clip.assetId, type=clip.type,
+                    startTime=clip.startTime, duration=asset_split - clip.trimStart,
+                    trimStart=clip.trimStart, trimEnd=asset_split,
+                    trackIndex=clip.trackIndex, asset=clip.asset,
+                    speed=clip.speed, reversed=clip.reversed, muted=clip.muted, volume=clip.volume,
+                    flipH=clip.flipH, flipV=clip.flipV, opacity=clip.opacity,
+                    transitionIn=clip.transitionIn.model_copy(),
+                    motion=clip.motion.model_copy() if clip.motion else None,
+                    colorCorrection=clip.colorCorrection.model_copy(),
+                    effects=list(clip.effects),
+                )
+                right = TimelineClip(
+                    id=_new_id("clip"), assetId=clip.assetId, type=clip.type,
+                    startTime=clip.startTime + left.duration,
+                    duration=clip.trimEnd - asset_split,
+                    trimStart=asset_split, trimEnd=clip.trimEnd,
+                    trackIndex=clip.trackIndex, asset=clip.asset,
+                    speed=clip.speed, reversed=clip.reversed, muted=clip.muted, volume=clip.volume,
+                    flipH=clip.flipH, flipV=clip.flipV, opacity=clip.opacity,
+                    transitionOut=clip.transitionOut.model_copy(),
+                    motion=clip.motion.model_copy() if clip.motion else None,
+                    colorCorrection=clip.colorCorrection.model_copy(),
+                    effects=list(clip.effects),
+                )
+                tl.clips[i : i + 1] = [left, right]
+                self._touch()
+                return left, right
+            raise KeyError(f"Clip not found: {clip_id}")
+
+    def get_clips_sorted(self) -> list[TimelineClip]:
+        with self._lock:
+            return sorted(
+                self._active_timeline().clips,
+                key=lambda c: (c.trackIndex, c.startTime),
+            )
+
+    # ── Clip property setters ─────────────────────────────────────────────────
+
+    def set_clip_speed(self, clip_id: str, speed: float) -> TimelineClip:
+        with self._lock:
+            clip = self._find_clip(clip_id)
+            old_speed = clip.speed
+            new_speed = max(0.1, min(10.0, speed))
+            # Recalculate playback duration to preserve the same source content,
+            # matching the frontend formula: newDuration = duration * (oldSpeed / newSpeed)
+            clip.duration = clip.duration * (old_speed / new_speed)
+            clip.speed = new_speed
+            self._touch()
+            return clip
+
+    def set_clip_volume(self, clip_id: str, volume: float) -> TimelineClip:
+        with self._lock:
+            clip = self._find_clip(clip_id)
+            clip.volume = max(0.0, min(1.0, volume))
+            self._touch()
+            return clip
+
+    def set_clip_muted(self, clip_id: str, muted: bool) -> TimelineClip:
+        with self._lock:
+            clip = self._find_clip(clip_id)
+            clip.muted = muted
+            self._touch()
+            return clip
+
+    def reverse_clip(self, clip_id: str, reversed_: bool) -> TimelineClip:
+        with self._lock:
+            clip = self._find_clip(clip_id)
+            clip.reversed = reversed_
+            self._touch()
+            return clip
+
+    def set_clip_opacity(self, clip_id: str, opacity: float) -> TimelineClip:
+        with self._lock:
+            clip = self._find_clip(clip_id)
+            clip.opacity = max(0.0, min(100.0, opacity))
+            self._touch()
+            return clip
+
+    def flip_clip(self, clip_id: str, flip_h: bool, flip_v: bool) -> TimelineClip:
+        with self._lock:
+            clip = self._find_clip(clip_id)
+            clip.flipH = flip_h
+            clip.flipV = flip_v
+            self._touch()
+            return clip
+
+    def set_clip_motion(self, clip_id: str, motion: KenBurnsMotion | None) -> TimelineClip:
+        with self._lock:
+            clip = self._find_clip(clip_id)
+            if motion is None:
+                clip.motion = None
+                self._touch()
+                return clip
+
+            # Clamp to safe ranges (export requires scale >= 1 so crop doesn't error).
+            motion.start.scale = max(1.0, float(motion.start.scale))
+            motion.end.scale = max(1.0, float(motion.end.scale))
+            motion.start.focusX = max(0.0, min(100.0, float(motion.start.focusX)))
+            motion.end.focusX = max(0.0, min(100.0, float(motion.end.focusX)))
+            motion.start.focusY = max(0.0, min(100.0, float(motion.start.focusY)))
+            motion.end.focusY = max(0.0, min(100.0, float(motion.end.focusY)))
+
+            clip.motion = motion
+            self._touch()
+            return clip
+
+    def set_clip_color_correction(self, clip_id: str, **kwargs: float) -> TimelineClip:
+        with self._lock:
+            clip = self._find_clip(clip_id)
+            cc = clip.colorCorrection
+            for field in ("brightness", "contrast", "saturation", "temperature",
+                          "tint", "exposure", "highlights", "shadows"):
+                if field in kwargs:
+                    setattr(cc, field, max(-100.0, min(100.0, kwargs[field])))
+            self._touch()
+            return clip
+
+    def set_clip_transition(
+        self, clip_id: str, side: str, transition_type: str, duration: float
+    ) -> TimelineClip:
+        with self._lock:
+            clip = self._find_clip(clip_id)
+            t = ClipTransition(type=transition_type, duration=max(0.0, duration))
+            if side == "in":
+                clip.transitionIn = t
+            elif side == "out":
+                clip.transitionOut = t
+            else:
+                raise ValueError(f"side must be 'in' or 'out', got '{side}'")
+            self._touch()
+            return clip
+
+    def add_clip_effect(
+        self, clip_id: str, effect_type: str, params: dict[str, float] | None = None
+    ) -> tuple[TimelineClip, ClipEffect]:
+        with self._lock:
+            clip = self._find_clip(clip_id)
+            effect = ClipEffect(
+                id=_new_id("effect"),
+                type=effect_type,
+                params=params or _default_effect_params(effect_type),
+            )
+            clip.effects.append(effect)
+            self._touch()
+            return clip, effect
+
+    def remove_clip_effect(self, clip_id: str, effect_id: str) -> TimelineClip:
+        with self._lock:
+            clip = self._find_clip(clip_id)
+            before = len(clip.effects)
+            clip.effects = [e for e in clip.effects if e.id != effect_id]
+            if len(clip.effects) == before:
+                raise KeyError(f"Effect not found: {effect_id}")
+            self._touch()
+            return clip
+
+    def update_clip_effect(
+        self, clip_id: str, effect_id: str, params: dict[str, float]
+    ) -> tuple[TimelineClip, ClipEffect]:
+        with self._lock:
+            clip = self._find_clip(clip_id)
+            for effect in clip.effects:
+                if effect.id == effect_id:
+                    effect.params.update(params)
+                    self._touch()
+                    return clip, effect
+            raise KeyError(f"Effect not found: {effect_id}")
+
+    # ── Subtitle management ───────────────────────────────────────────────────
+
+    def add_subtitle(
+        self,
+        text: str,
+        start_time: float,
+        end_time: float,
+        track_index: int = 0,
+        style: dict[str, Any] | None = None,
+    ) -> SubtitleClip:
+        with self._lock:
+            sub = SubtitleClip(
+                id=_new_id("sub"),
+                text=text,
+                startTime=start_time,
+                endTime=end_time,
+                trackIndex=track_index,
+                style=SubtitleStyle.model_validate(style) if style else None,
+            )
+            self._active_timeline().subtitles.append(sub)
+            self._touch()
+            return sub
+
+    def update_subtitle(
+        self,
+        subtitle_id: str,
+        text: str | None = None,
+        start_time: float | None = None,
+        end_time: float | None = None,
+    ) -> SubtitleClip:
+        with self._lock:
+            for sub in self._active_timeline().subtitles:
+                if sub.id == subtitle_id:
+                    if text is not None:
+                        sub.text = text
+                    if start_time is not None:
+                        sub.startTime = start_time
+                    if end_time is not None:
+                        sub.endTime = end_time
+                    self._touch()
+                    return sub
+            raise KeyError(f"Subtitle not found: {subtitle_id}")
+
+    def remove_subtitle(self, subtitle_id: str) -> None:
+        with self._lock:
+            tl = self._active_timeline()
+            before = len(tl.subtitles)
+            tl.subtitles = [s for s in tl.subtitles if s.id != subtitle_id]
+            if len(tl.subtitles) == before:
+                raise KeyError(f"Subtitle not found: {subtitle_id}")
+            self._touch()
+
+    def set_subtitle_style(self, subtitle_id: str, **style_kwargs: object) -> SubtitleClip:
+        with self._lock:
+            for sub in self._active_timeline().subtitles:
+                if sub.id == subtitle_id:
+                    if sub.style is None:
+                        sub.style = SubtitleStyle()
+                    for k, v in style_kwargs.items():
+                        if hasattr(sub.style, k):
+                            setattr(sub.style, k, v)
+                    self._touch()
+                    return sub
+            raise KeyError(f"Subtitle not found: {subtitle_id}")
+
+    def get_subtitles(self) -> list[SubtitleClip]:
+        with self._lock:
+            return list(self._active_timeline().subtitles)
+
+    # ── Text overlay clip ─────────────────────────────────────────────────────
+
+    def add_text_clip(
+        self,
+        track_index: int,
+        start_time: float,
+        duration: float,
+        style: dict[str, Any] | None = None,
+    ) -> TimelineClip:
+        with self._lock:
+            text_style = TextOverlayStyle.model_validate(style or {})
+            clip = TimelineClip(
+                id=_new_id("clip"),
+                assetId=None,
+                type="text",
+                startTime=start_time,
+                duration=duration,
+                trimStart=0.0,
+                trimEnd=duration,
+                trackIndex=track_index,
+                asset=None,
+                textStyle=text_style,
+            )
+            self._active_timeline().clips.append(clip)
+            self._touch()
+            return clip
+
+    def update_text_clip_style(self, clip_id: str, **style_kwargs: object) -> TimelineClip:
+        with self._lock:
+            clip = self._find_clip(clip_id)
+            if clip.type != "text":
+                raise ValueError(f"Clip {clip_id} is not a text clip (type={clip.type})")
+            if clip.textStyle is None:
+                clip.textStyle = TextOverlayStyle()
+            for k, v in style_kwargs.items():
+                if hasattr(clip.textStyle, k):
+                    setattr(clip.textStyle, k, v)
+            self._touch()
+            return clip
+
+
+# ── Effect default params ─────────────────────────────────────────────────────
+
+_EFFECT_DEFAULTS: dict[str, dict[str, float]] = {
+    "blur":           {"amount": 5.0},
+    "sharpen":        {"amount": 50.0},
+    "glow":           {"amount": 30.0, "radius": 10.0},
+    "vignette":       {"amount": 50.0},
+    "grain":          {"amount": 30.0},
+    "lut-cinematic":  {"intensity": 100.0},
+    "lut-vintage":    {"intensity": 100.0},
+    "lut-bw":         {"intensity": 100.0},
+    "lut-cool":       {"intensity": 100.0},
+    "lut-warm":       {"intensity": 100.0},
+    "lut-muted":      {"intensity": 100.0},
+    "lut-vivid":      {"intensity": 100.0},
+}
+
+
+def _default_effect_params(effect_type: str) -> dict[str, float]:
+    return dict(_EFFECT_DEFAULTS.get(effect_type, {"amount": 50.0}))

@@ -151,7 +151,7 @@ export function Home() {
             <h4 className="px-3 text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">
               Quick Actions
             </h4>
-            <button 
+            <button
               onClick={openPlayground}
               className="w-full px-3 py-2 rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white text-left text-sm flex items-center gap-2 transition-colors"
             >

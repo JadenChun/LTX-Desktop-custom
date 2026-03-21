@@ -345,6 +345,21 @@ export interface TextPreset {
   style: Partial<TextOverlayStyle>
 }
 
+export interface KenBurnsKeyframe {
+  scale: number
+  focusX: number // 0–100 (% of frame width), 50 = center
+  focusY: number // 0–100 (% of frame height), 50 = center
+}
+
+export interface KenBurnsMotion {
+  type: 'ken_burns'
+  start: KenBurnsKeyframe
+  end: KenBurnsKeyframe
+  easing?: 'linear' | 'easeInOut'
+}
+
+export type ClipMotion = KenBurnsMotion
+
 export const TEXT_PRESETS: TextPreset[] = [
   { id: 'centered-title', name: 'Centered Title', category: 'titles', style: { text: 'Title', fontSize: 72, fontWeight: 'bold', positionX: 50, positionY: 50, textAlign: 'center' } },
   { id: 'big-bold', name: 'Big & Bold', category: 'titles', style: { text: 'HEADLINE', fontSize: 96, fontWeight: '900', positionX: 50, positionY: 45, textAlign: 'center', letterSpacing: 4 } },
@@ -390,6 +405,8 @@ export interface TimelineClip {
   letterbox?: LetterboxSettings
   // Text overlay
   textStyle?: TextOverlayStyle
+  // Motion effects (pan/zoom)
+  motion?: ClipMotion
 }
 
 export interface Timeline {
@@ -406,6 +423,12 @@ export interface Project {
   name: string
   createdAt: number
   updatedAt: number
+  // When present, indicates this project is synced from the MCP project store.
+  // Used to detect backend updates even if the local project has been edited.
+  mcpLastUpdatedAt?: number
+  // When present, indicates this project is a local backup created before overwriting from MCP sync.
+  // Used to merge the backup back into the MCP project.
+  backupOfProjectId?: string
   assets: Asset[]
   thumbnail?: string
   timelines: Timeline[]

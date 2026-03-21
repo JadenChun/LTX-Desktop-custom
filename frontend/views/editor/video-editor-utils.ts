@@ -8,6 +8,61 @@ export type { KeyboardLayout } from '../../lib/keyboard-shortcuts'
 import type { TimelineClip, TransitionType, Track, ClipEffect, EffectMask } from '../../types/project'
 import { DEFAULT_COLOR_CORRECTION } from '../../types/project'
 
+function clamp01(v: number): number {
+  return Math.max(0, Math.min(1, v))
+}
+
+function smoothstep(t: number): number {
+  return t * t * (3 - 2 * t)
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t
+}
+
+/**
+ * Compute per-frame motion styles (Ken Burns) for timeline clips.
+ *
+ * Motion parameters are interpreted in *frame space* (0–100% of the video frame),
+ * so the same settings work regardless of the source asset aspect ratio.
+ */
+export function getClipMotionStyles(
+  clip: TimelineClip,
+  timeInClip: number,
+  frameSize: { width: number; height: number },
+): React.CSSProperties {
+  const motion = clip.motion
+  if (!motion || motion.type !== 'ken_burns') return {}
+  if (!Number.isFinite(frameSize.width) || !Number.isFinite(frameSize.height) || frameSize.width <= 0 || frameSize.height <= 0) return {}
+  if (!Number.isFinite(timeInClip) || !Number.isFinite(clip.duration) || clip.duration <= 0) return {}
+
+  const tRaw = clamp01(timeInClip / clip.duration)
+  const t = motion.easing === 'easeInOut' ? smoothstep(tRaw) : tRaw
+
+  const scale = Math.max(0.01, lerp(motion.start.scale, motion.end.scale, t))
+  const focusX = lerp(motion.start.focusX, motion.end.focusX, t)
+  const focusY = lerp(motion.start.focusY, motion.end.focusY, t)
+
+  const fx = (focusX / 100) * frameSize.width
+  const fy = (focusY / 100) * frameSize.height
+
+  let dx = frameSize.width / 2 - fx * scale
+  let dy = frameSize.height / 2 - fy * scale
+
+  if (scale >= 1) {
+    const minDx = frameSize.width - frameSize.width * scale
+    const minDy = frameSize.height - frameSize.height * scale
+    dx = Math.max(minDx, Math.min(0, dx))
+    dy = Math.max(minDy, Math.min(0, dy))
+  }
+
+  return {
+    transformOrigin: '0 0',
+    transform: `translate(${dx}px, ${dy}px) scale(${scale})`,
+    willChange: 'transform',
+  }
+}
+
 // ── Tool types & definitions ────────────────────────────────────────
 
 export type ToolType = 'select' | 'trackForward' | 'blade' | 'slip' | 'slide' | 'ripple' | 'roll'

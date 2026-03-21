@@ -9,7 +9,7 @@ import { Tooltip } from '../../components/ui/tooltip'
 import { AudioWaveform } from '../../components/AudioWaveform'
 import { DEFAULT_SUBTITLE_STYLE } from '../../types/project'
 import type { TimelineClip, Track, SubtitleClip } from '../../types/project'
-import { getClipEffectStyles, getTransitionBgColor, formatTime, getShortcutLabel, tooltipLabel, getMaskedEffectOverlays } from './video-editor-utils'
+import { getClipEffectStyles, getClipMotionStyles, getTransitionBgColor, formatTime, getShortcutLabel, tooltipLabel, getMaskedEffectOverlays } from './video-editor-utils'
 import type { KeyboardLayout } from '../../lib/keyboard-shortcuts'
 
 export interface ProgramMonitorProps {
@@ -246,6 +246,27 @@ export function ProgramMonitor({
                     const lowerStyles = getClipEffectStyles(lowerClip, lowerOffset)
                     const lowerSrc = getClipUrl(lowerClip) || lowerClip.asset?.url || lowerClip.importedUrl || ''
                     if (lowerClip.asset?.type === 'image' || lowerClip.type === 'image') {
+                      const lowerMotion = getClipMotionStyles(lowerClip, lowerOffset, videoFrameSize)
+                      if (lowerMotion.transform) {
+                        const { opacity: lowerOpacityProp, transform: flipTransform, ...rest } = lowerStyles as any
+                        const lowerOpacity = typeof lowerOpacityProp === 'number' ? lowerOpacityProp : 1
+                        return (
+                          <div
+                            key={`comp-${lowerClip.id}`}
+                            className="absolute inset-0 w-full h-full pointer-events-none z-[1] bg-black overflow-hidden"
+                            style={{ ...rest, ...(lowerOpacity !== 1 ? { opacity: lowerOpacity } : {}) }}
+                          >
+                            <div className="absolute inset-0 w-full h-full" style={lowerMotion}>
+                              <img
+                                src={lowerSrc}
+                                alt=""
+                                className="w-full h-full object-contain pointer-events-none"
+                                style={flipTransform ? { transform: flipTransform } : undefined}
+                              />
+                            </div>
+                          </div>
+                        )
+                      }
                       return (
                         <img
                           key={`comp-${lowerClip.id}`}
@@ -310,23 +331,47 @@ export function ProgramMonitor({
                   <div
                     id="video-pool-container"
                     className={`absolute inset-0 w-full h-full pointer-events-none z-[2] ${!isPlaying && monitorClip?.asset?.type !== 'video' ? 'hidden' : ''}`}
-                    style={monitorClip?.asset?.type === 'video' ? {
-                      ...getClipEffectStyles(monitorClip, clipPlaybackOffset),
-                      ...(dissolveOutOpacity !== undefined ? { opacity: dissolveOutOpacity } : {}),
-                    } : undefined}
+                    style={monitorClip?.asset?.type === 'video' ? (() => {
+                      const base = getClipEffectStyles(monitorClip, clipPlaybackOffset)
+                      const motion = getClipMotionStyles(monitorClip, clipPlaybackOffset, videoFrameSize)
+                      const baseOpacity = typeof base.opacity === 'number' ? base.opacity : 1
+                      const outOpacity = dissolveOutOpacity !== undefined ? baseOpacity * dissolveOutOpacity : baseOpacity
+
+                      const transform = [base.transform, motion.transform].filter(Boolean).join(' ')
+                      return {
+                        ...base,
+                        ...motion,
+                        ...(transform ? { transform } : {}),
+                        ...(outOpacity !== 1 ? { opacity: outOpacity } : {}),
+                      }
+                    })() : undefined}
                   />
 
                   {activeClip?.asset?.type === 'image' && (
-                    <img
-                      ref={previewImageRef as React.RefObject<HTMLImageElement>}
-                      src={getClipUrl(activeClip) || activeClip.asset.url}
-                      alt=""
-                      className="absolute inset-0 w-full h-full object-contain z-[2]"
-                      style={{
-                        ...getClipEffectStyles(activeClip, clipPlaybackOffset),
-                        ...(dissolveOutOpacity !== undefined ? { opacity: dissolveOutOpacity } : {}),
-                      }}
-                    />
+                    (() => {
+                      const baseStyles = getClipEffectStyles(activeClip, clipPlaybackOffset)
+                      const { opacity: baseOpacityProp, transform: flipTransform, ...rest } = baseStyles as any
+                      const baseOpacity = typeof baseOpacityProp === 'number' ? baseOpacityProp : 1
+                      const outOpacity = dissolveOutOpacity !== undefined ? baseOpacity * dissolveOutOpacity : baseOpacity
+                      const motion = getClipMotionStyles(activeClip, clipPlaybackOffset, videoFrameSize)
+                      const src = getClipUrl(activeClip) || activeClip.asset.url
+                      return (
+                        <div
+                          className="absolute inset-0 w-full h-full pointer-events-none z-[2] bg-black overflow-hidden"
+                          style={{ ...rest, ...(outOpacity !== 1 ? { opacity: outOpacity } : {}) }}
+                        >
+                          <div className="absolute inset-0 w-full h-full" style={motion.transform ? motion : undefined}>
+                            <img
+                              ref={previewImageRef as React.RefObject<HTMLImageElement>}
+                              src={src}
+                              alt=""
+                              className="w-full h-full object-contain"
+                              style={flipTransform ? { transform: flipTransform } : undefined}
+                            />
+                          </div>
+                        </div>
+                      )
+                    })()
                   )}
 
                   {/* Cross-dissolve incoming clip overlay */}
@@ -334,16 +379,24 @@ export function ProgramMonitor({
                     const { incoming, progress } = crossDissolveState
                     const inOffset = currentTime - incoming.startTime
                     const inOpacity = progress * ((incoming.opacity ?? 100) / 100)
-                    const inStyle = { ...getClipEffectStyles(incoming, inOffset), opacity: inOpacity }
+                    const inBaseStyle = getClipEffectStyles(incoming, inOffset)
+                    const baseOpacity = typeof inBaseStyle.opacity === 'number' ? inBaseStyle.opacity : 1
+                    const inStyle = { ...inBaseStyle, opacity: baseOpacity * inOpacity }
                     const inSrc = getClipUrl(incoming) || incoming.asset?.url || ''
                     if (incoming.asset?.type === 'video') {
+                      const motion = getClipMotionStyles(incoming, inOffset, videoFrameSize)
+                      const transform = [inBaseStyle.transform, motion.transform].filter(Boolean).join(' ')
                       return (
                         <video
                           ref={previewVideoRef as React.RefObject<HTMLVideoElement>}
                           key={`dissolve-in-${incoming.id}`}
                           src={inSrc}
                           className="absolute inset-0 w-full h-full object-contain pointer-events-none"
-                          style={inStyle}
+                          style={{
+                            ...inStyle,
+                            ...motion,
+                            ...(transform ? { transform } : {}),
+                          }}
                           playsInline
                           muted
                           preload="auto"
@@ -351,14 +404,24 @@ export function ProgramMonitor({
                       )
                     }
                     if (incoming.asset?.type === 'image') {
+                      const motion = getClipMotionStyles(incoming, inOffset, videoFrameSize)
+                      const { opacity: inOpacityProp, transform: flipTransform, ...rest } = inStyle as any
+                      const finalOpacity = typeof inOpacityProp === 'number' ? inOpacityProp : 1
                       return (
-                        <img
+                        <div
                           key={`dissolve-in-${incoming.id}`}
-                          src={inSrc}
-                          alt=""
-                          className="absolute inset-0 w-full h-full object-contain pointer-events-none"
-                          style={inStyle}
-                        />
+                          className="absolute inset-0 w-full h-full pointer-events-none bg-black overflow-hidden"
+                          style={{ ...rest, ...(finalOpacity !== 1 ? { opacity: finalOpacity } : {}) }}
+                        >
+                          <div className="absolute inset-0 w-full h-full" style={motion.transform ? motion : undefined}>
+                            <img
+                              src={inSrc}
+                              alt=""
+                              className="w-full h-full object-contain"
+                              style={flipTransform ? { transform: flipTransform } : undefined}
+                            />
+                          </div>
+                        </div>
                       )
                     }
                     return null

@@ -1,15 +1,54 @@
 import { urlToFilePath } from './ffmpeg-utils'
 
+export interface KenBurnsKeyframe {
+  scale: number
+  focusX: number // 0–100 (% of frame width), 50 = center
+  focusY: number // 0–100 (% of frame height), 50 = center
+}
+
+export interface KenBurnsMotion {
+  type: 'ken_burns'
+  start: KenBurnsKeyframe
+  end: KenBurnsKeyframe
+  easing?: 'linear' | 'easeInOut'
+}
+
+export type ClipMotion = KenBurnsMotion
+
 export interface ExportClip {
   url: string; type: string; startTime: number; duration: number; trimStart: number;
   speed: number; reversed: boolean; flipH: boolean; flipV: boolean; opacity: number; trackIndex: number;
   muted: boolean; volume: number;
+  motion?: ClipMotion;
 }
 
 export interface FlatSegment {
   filePath: string; type: string; startTime: number; duration: number; trimStart: number;
   speed: number; reversed: boolean; flipH: boolean; flipV: boolean; opacity: number;
   muted: boolean; volume: number;
+  motion?: ClipMotion;
+}
+
+function clamp01(v: number): number {
+  return Math.max(0, Math.min(1, v))
+}
+
+function smoothstep(t: number): number {
+  return t * t * (3 - 2 * t)
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t
+}
+
+function sampleKenBurns(motion: KenBurnsMotion, tRaw: number): KenBurnsKeyframe {
+  const t0 = clamp01(tRaw)
+  const t = motion.easing === 'easeInOut' ? smoothstep(t0) : t0
+  return {
+    scale: lerp(motion.start.scale, motion.end.scale, t),
+    focusX: lerp(motion.start.focusX, motion.end.focusX, t),
+    focusY: lerp(motion.start.focusY, motion.end.focusY, t),
+  }
 }
 
 /**
@@ -47,6 +86,17 @@ export function flattenTimeline(clips: ExportClip[]): FlatSegment[] {
     if (active.length > 0) {
       const c = active[0]
       const offsetInClip = t0 - c.startTime
+      let segMotion: ClipMotion | undefined
+      if (c.motion && c.motion.type === 'ken_burns' && c.duration > 0) {
+        const tStart = offsetInClip / c.duration
+        const tEnd = (offsetInClip + segDur) / c.duration
+        segMotion = {
+          type: 'ken_burns',
+          start: sampleKenBurns(c.motion, tStart),
+          end: sampleKenBurns(c.motion, tEnd),
+          easing: c.motion.easing,
+        }
+      }
       segments.push({
         filePath: urlToFilePath(c.url),
         type: c.type,
@@ -60,6 +110,7 @@ export function flattenTimeline(clips: ExportClip[]): FlatSegment[] {
         opacity: c.opacity,
         muted: c.muted,
         volume: c.volume,
+        motion: segMotion,
       })
     } else {
       segments.push({
@@ -78,6 +129,7 @@ export function flattenTimeline(clips: ExportClip[]): FlatSegment[] {
         prev.speed === seg.speed && prev.reversed === seg.reversed &&
         prev.flipH === seg.flipH && prev.flipV === seg.flipV &&
         prev.opacity === seg.opacity && prev.muted === seg.muted && prev.volume === seg.volume &&
+        !prev.motion && !seg.motion &&
         Math.abs((prev.trimStart + prev.duration * prev.speed) - seg.trimStart) < 0.01) {
       prev.duration += seg.duration
     } else {

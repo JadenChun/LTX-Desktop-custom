@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 import type { Project, Asset, AssetTake, ViewType, ProjectTab, Timeline } from '../types/project'
 import { createDefaultTimeline } from '../types/project'
+import { backendFetch } from '../lib/backend'
 import { logger } from '../lib/logger'
 
 interface ProjectContextType {
@@ -37,6 +38,9 @@ interface ProjectContextType {
   updateTimeline: (projectId: string, timelineId: string, updates: Partial<Pick<Timeline, 'tracks' | 'clips' | 'subtitles'>>) => void
   getActiveTimeline: (projectId: string) => Timeline | null
   
+  // Agent import
+  importMcpProject: (projectId: string, options?: ImportMcpProjectOptions) => Promise<Project>
+
   // Navigation helpers
   openProject: (id: string) => void
   goHome: () => void
@@ -86,6 +90,11 @@ export interface PendingIcLoraUpdate {
   assetId: string
   clipIds: string[]
   newTakeIndex: number
+}
+
+export interface ImportMcpProjectOptions {
+  overwrite?: boolean
+  createBackup?: boolean
 }
 
 const ProjectContext = createContext<ProjectContextType | null>(null)
@@ -181,12 +190,192 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
   // Initialize with data from localStorage
   const [projects, setProjects] = useState<Project[]>(() => loadProjectsFromStorage())
   const isInitializedRef = useRef(false)
+  const backupMergeInFlightRef = useRef(false)
+  const backupMergeLastAttemptRef = useRef(0)
+  const mcpSaveTimersRef = useRef<Map<string, number>>(new Map())
+  const mcpSavePendingRef = useRef<Map<string, Project>>(new Map())
+  const mcpSaveInFlightRef = useRef<Set<string>>(new Set())
   
   // Mark as initialized after first render
   useEffect(() => {
     isInitializedRef.current = true
   }, [])
-  
+
+  // Always sync MCP projects from the backend store (so MCP tool edits appear in the UI)
+  useEffect(() => {
+    let inFlight = false
+    const syncMcpProjects = async () => {
+      if (inFlight) return
+      inFlight = true
+      try {
+        const resp = await backendFetch('/api/mcp/projects')
+        if (!resp.ok) return
+        const summaries = await resp.json() as { id: string, updatedAt?: number }[]
+
+        // Read existing projects directly from localStorage to avoid stale closure
+        const stored = localStorage.getItem(STORAGE_KEY)
+        const existing = stored ? (JSON.parse(stored) as Project[]) : []
+        const existingById = new Map(existing.map(p => [p.id, p]))
+
+        const toAdd: Project[] = []
+        const toUpdate: Project[] = []
+        const toBackupIds: string[] = []
+
+        for (const summary of summaries) {
+          if (!summary?.id) continue
+          const local = existingById.get(summary.id)
+
+          const mcpUpdatedAt = typeof summary.updatedAt === 'number' ? summary.updatedAt : 0
+          const lastSeen = local?.mcpLastUpdatedAt ?? 0
+
+          if (local && mcpUpdatedAt <= lastSeen) continue
+
+          // If the user edited locally since last MCP sync, keep a backup before overwriting.
+          if (local && local.updatedAt > lastSeen) toBackupIds.push(local.id)
+
+          const pr = await backendFetch(`/api/mcp/projects/${summary.id}`)
+          if (!pr.ok) continue
+          const projectData = await pr.json() as Project
+          const imported = recoverAssetUrls(migrateProject(projectData))
+          imported.mcpLastUpdatedAt = imported.updatedAt
+          if (!local) toAdd.push(imported)
+          else toUpdate.push(imported)
+        }
+
+        if (toAdd.length === 0 && toUpdate.length === 0) return
+
+        setProjects(prev => {
+          const now = Date.now()
+          const updatedById = new Map<string, Project>()
+          for (const p of toUpdate) updatedById.set(p.id, p)
+
+          const backups: Project[] = []
+          const seen = new Set<string>()
+          for (const id of toBackupIds) {
+            if (seen.has(id)) continue
+            seen.add(id)
+            const existingProject = prev.find(p => p.id === id)
+            if (!existingProject) continue
+            const backupId = `project-${now}-${Math.random().toString(36).substr(2, 9)}`
+            backups.push({
+              ...existingProject,
+              id: backupId,
+              name: `${existingProject.name} (Local backup)`,
+              createdAt: now,
+              updatedAt: now,
+              mcpLastUpdatedAt: undefined,
+              backupOfProjectId: existingProject.id,
+            })
+          }
+
+          const replaced = prev.map(p => updatedById.get(p.id) ?? p)
+          const existingPrevIds = new Set(replaced.map(p => p.id))
+          const newOnes = toAdd.filter(p => !existingPrevIds.has(p.id))
+          return backups.length || newOnes.length ? [...backups, ...newOnes, ...replaced] : replaced
+        })
+
+        const parts: string[] = []
+        if (toAdd.length > 0) parts.push(`imported ${toAdd.length}`)
+        if (toUpdate.length > 0) parts.push(`updated ${toUpdate.length}`)
+        logger.info(`MCP sync: ${parts.join(', ')} project(s)`)
+      } catch (e) {
+        // Silently fail — MCP backend may not be running
+        logger.info(`MCP auto-sync skipped: ${e}`)
+      } finally {
+        inFlight = false
+      }
+    }
+
+    syncMcpProjects()
+    const intervalId = window.setInterval(syncMcpProjects, 2000)
+    const onFocus = () => { void syncMcpProjects() }
+    window.addEventListener('focus', onFocus)
+
+    return () => {
+      window.clearInterval(intervalId)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [])
+
+  // If MCP sync created a local backup, automatically merge it back into the MCP store (one-time recovery).
+  useEffect(() => {
+    const now = Date.now()
+    if (backupMergeInFlightRef.current) return
+    if (now - backupMergeLastAttemptRef.current < 1500) return
+
+    const backups = projects.filter(p => p.name.endsWith(' (Local backup)'))
+    if (backups.length === 0) return
+
+    const mcpProjects = projects.filter(p => p.mcpLastUpdatedAt !== undefined)
+    if (mcpProjects.length === 0) return
+
+    // For each base project, pick the newest backup and overwrite the MCP store with it.
+    const candidates: Array<{ backup: Project; target: Project }> = []
+    const byTargetId = new Map<string, Project>()
+
+    for (const b of backups) {
+      const targetId = b.backupOfProjectId
+      const target = targetId ? mcpProjects.find(p => p.id === targetId) : (() => {
+        const baseName = b.name.replace(/ \(Local backup\)$/, '')
+        return mcpProjects.find(p => p.name === baseName)
+      })()
+      if (!target) continue
+      if (b.updatedAt <= (target.mcpLastUpdatedAt ?? 0)) continue
+
+      const existing = byTargetId.get(target.id)
+      if (!existing || (b.updatedAt > existing.updatedAt)) {
+        byTargetId.set(target.id, b)
+      }
+    }
+
+    for (const [targetId, backup] of byTargetId.entries()) {
+      const target = mcpProjects.find(p => p.id === targetId)
+      if (target) candidates.push({ backup, target })
+    }
+
+    if (candidates.length === 0) return
+
+    backupMergeInFlightRef.current = true
+    backupMergeLastAttemptRef.current = now
+
+    void (async () => {
+      for (const { backup, target } of candidates) {
+        try {
+          const payload: any = {
+            ...backup,
+            id: target.id,
+            name: target.name,
+            createdAt: target.createdAt,
+          }
+          delete payload.mcpLastUpdatedAt
+          delete payload.backupOfProjectId
+
+          const resp = await backendFetch(`/api/mcp/projects/${target.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          })
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+          const saved = await resp.json() as Project
+          const serverUpdatedAt = saved.updatedAt
+
+          setProjects(prev => {
+            const next = prev
+              .filter(p => p.id !== backup.id)
+              .map(p => p.id === target.id ? { ...saved, mcpLastUpdatedAt: serverUpdatedAt } : p)
+            return next
+          })
+
+          logger.info(`Merged local backup into MCP project: ${target.id}`)
+        } catch (e) {
+          logger.info(`Backup merge failed for ${target.id}: ${e}`)
+        }
+      }
+    })().finally(() => {
+      backupMergeInFlightRef.current = false
+    })
+  }, [projects])
+
   // Save projects to localStorage when changed (but not on initial load)
   useEffect(() => {
     // Skip saving on initial render to avoid overwriting with stale data
@@ -199,6 +388,66 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
       logger.error(`Failed to save projects: ${e}`)
     }
   }, [projects])
+
+  const queueMcpSave = useCallback((projectId: string) => {
+    const existingTimer = mcpSaveTimersRef.current.get(projectId)
+    if (existingTimer) window.clearTimeout(existingTimer)
+
+    const handle = window.setTimeout(async () => {
+      const pending = mcpSavePendingRef.current.get(projectId)
+      if (!pending || pending.mcpLastUpdatedAt === undefined) return
+      if (mcpSaveInFlightRef.current.has(projectId)) {
+        queueMcpSave(projectId)
+        return
+      }
+
+      const lastSeen = pending.mcpLastUpdatedAt ?? 0
+      if (pending.updatedAt <= lastSeen) {
+        mcpSavePendingRef.current.delete(projectId)
+        return
+      }
+
+      mcpSaveInFlightRef.current.add(projectId)
+      try {
+        const resp = await backendFetch(`/api/mcp/projects/${projectId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(pending),
+        })
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+        const saved = await resp.json() as Project
+        const serverUpdatedAt = saved.updatedAt
+
+        setProjects(prev => prev.map(p => (
+          p.id === projectId
+            ? { ...p, updatedAt: serverUpdatedAt, mcpLastUpdatedAt: serverUpdatedAt }
+            : p
+        )))
+
+        // If no newer local edits happened during the request, clear pending.
+        const stillPending = mcpSavePendingRef.current.get(projectId)
+        if (stillPending && stillPending.updatedAt <= (serverUpdatedAt ?? stillPending.updatedAt)) {
+          mcpSavePendingRef.current.delete(projectId)
+        }
+      } catch (e) {
+        logger.info(`MCP save failed for ${projectId}: ${e}`)
+      } finally {
+        mcpSaveInFlightRef.current.delete(projectId)
+        if (mcpSavePendingRef.current.has(projectId)) queueMcpSave(projectId)
+      }
+    }, 600)
+
+    mcpSaveTimersRef.current.set(projectId, handle)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      for (const handle of mcpSaveTimersRef.current.values()) {
+        window.clearTimeout(handle)
+      }
+      mcpSaveTimersRef.current.clear()
+    }
+  }, [])
   
   const currentProject = projects.find(p => p.id === currentProjectId) || null
   
@@ -457,18 +706,25 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
   }, [])
   
   const updateTimeline = useCallback((projectId: string, timelineId: string, updates: Partial<Pick<Timeline, 'tracks' | 'clips' | 'subtitles'>>) => {
-    setProjects(prev => prev.map(p => 
-      p.id === projectId 
-        ? {
-            ...p,
-            timelines: (p.timelines || []).map(t => 
-              t.id === timelineId ? { ...t, ...updates } : t
-            ),
-            updatedAt: Date.now(),
-          }
-        : p
-    ))
-  }, [])
+    setProjects(prev => {
+      const next = prev.map(p => {
+        if (p.id !== projectId) return p
+        const nextProject: Project = {
+          ...p,
+          timelines: (p.timelines || []).map(t =>
+            t.id === timelineId ? { ...t, ...updates } : t
+          ),
+          updatedAt: Date.now(),
+        }
+        if (p.mcpLastUpdatedAt !== undefined) {
+          mcpSavePendingRef.current.set(projectId, nextProject)
+        }
+        return nextProject
+      })
+      return next
+    })
+    queueMcpSave(projectId)
+  }, [queueMcpSave])
   
   const getActiveTimeline = useCallback((projectId: string): Timeline | null => {
     const project = projects.find(p => p.id === projectId)
@@ -479,6 +735,44 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
     return active || project.timelines[0]
   }, [projects])
   
+  const importMcpProject = useCallback(async (projectId: string, options?: ImportMcpProjectOptions): Promise<Project> => {
+    const overwrite = options?.overwrite ?? true
+    const createBackup = options?.createBackup ?? true
+
+    const resp = await backendFetch(`/api/mcp/projects/${projectId}`)
+    if (!resp.ok) throw new Error(`Failed to fetch MCP project: ${resp.status}`)
+    const projectData = await resp.json() as Project
+    const imported = recoverAssetUrls(migrateProject(projectData))
+    imported.mcpLastUpdatedAt = imported.updatedAt
+    setProjects(prev => {
+      const existingIndex = prev.findIndex(p => p.id === imported.id)
+      if (existingIndex === -1) return [imported, ...prev]
+      if (!overwrite) return prev
+
+      const next = [...prev]
+
+      if (createBackup) {
+        const existing = next[existingIndex]
+        const backupId = `project-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+        const backup: Project = {
+          ...existing,
+          id: backupId,
+          name: `${existing.name} (Backup)`,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        }
+        next.unshift(backup)
+      }
+
+      const replacedIndex = next.findIndex(p => p.id === imported.id)
+      if (replacedIndex === -1) next.unshift(imported)
+      else next[replacedIndex] = imported
+
+      return next
+    })
+    return imported
+  }, [])
+
   const openProject = useCallback((id: string) => {
     setCurrentProjectId(id)
     setCurrentView('project')
@@ -521,6 +815,7 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
       setActiveTimeline,
       updateTimeline,
       getActiveTimeline,
+      importMcpProject,
       openProject,
       goHome,
       openPlayground,

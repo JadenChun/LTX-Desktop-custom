@@ -174,8 +174,9 @@ function AppContent() {
   const isForcedFirstRun =
     setupState !== 'loading' && setupState.needsSetup && !setupState.needsLicense && forceApiGenerations
 
+  // API key is optional — complete first-run setup even without one.
   const shouldAutoFinalizeForcedFirstRun =
-    isForcedFirstRun && isLoaded && settings.hasLtxApiKey && !isFinalizingFirstRun && !firstRunFinalizeError
+    isForcedFirstRun && isLoaded && !isFinalizingFirstRun && !firstRunFinalizeError
 
   const areRequiredModelsDownloaded = useCallback(async () => {
     const response = await backendFetch('/api/models/status')
@@ -255,22 +256,7 @@ function AppContent() {
   ) : null
 
   const showGlobalControls = currentView !== 'home' && status.connected && setupState !== 'loading' && !setupState.needsSetup
-  const shouldBlockUntilSettingsLoaded = forceApiGenerations && !isLoaded
-  const shouldShowForcedFirstRunUpsell = isForcedFirstRun && isLoaded && !settings.hasLtxApiKey
-  const shouldShowGlobalForcedUpsell = forceApiGenerations && setupState !== 'loading' && !setupState.needsSetup && isLoaded && !settings.hasLtxApiKey
-  const shouldBlockForLtxKey = shouldShowForcedFirstRunUpsell || shouldShowGlobalForcedUpsell
-
-  useEffect(() => {
-    if (shouldBlockForLtxKey && apiGatewayRequest === null) {
-      setApiGatewayRequest({
-        requiredKeys: ['ltx'],
-        title: 'Connect API Keys',
-        description: 'This app is configured for API-only generation. Add your API key to continue.',
-        blocking: true,
-        includeOptionalMissing: true,
-      })
-    }
-  }, [shouldBlockForLtxKey, apiGatewayRequest])
+  // LTX API key is optional — no upsell modal needed during first run.
 
   const shouldShowGateway = apiGatewayRequest !== null
 
@@ -477,16 +463,7 @@ function AppContent() {
         sections={gatewaySections}
       />
 
-      {shouldBlockUntilSettingsLoaded && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 backdrop-blur-sm">
-          <div className="flex items-center gap-2 text-sm text-zinc-200">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Loading settings...
-          </div>
-        </div>
-      )}
-
-      {isForcedFirstRun && isLoaded && settings.hasLtxApiKey && isFinalizingFirstRun && (
+      {isForcedFirstRun && isLoaded && isFinalizingFirstRun && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm">
           <div className="flex items-center gap-2 text-sm text-zinc-200">
             <Loader2 className="h-4 w-4 animate-spin" />

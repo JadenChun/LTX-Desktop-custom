@@ -33,9 +33,32 @@ export function buildVideoFilterGraph(
     } else if (seg.type === 'image') {
       // Image: loop for exact duration, use target fps for frame generation
       inputs.push('-loop', '1', '-framerate', String(fps), '-t', seg.duration.toFixed(6), '-i', seg.filePath)
-      let chain = `[${idx}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:-1:-1:color=black,setsar=1`
+      let chain = `[${idx}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:-1:-1:color=black`
+
+      if (seg.motion?.type === 'ken_burns') {
+        const startScale = Math.max(1, seg.motion.start.scale)
+        const endScale = Math.max(1, seg.motion.end.scale)
+        const startFx = Math.max(0, Math.min(100, seg.motion.start.focusX))
+        const endFx = Math.max(0, Math.min(100, seg.motion.end.focusX))
+        const startFy = Math.max(0, Math.min(100, seg.motion.start.focusY))
+        const endFy = Math.max(0, Math.min(100, seg.motion.end.focusY))
+
+        const durExpr = Math.max(0.001, seg.duration).toFixed(6)
+        const tExpr = `min(1,max(0,t/${durExpr}))`
+        const easedT = seg.motion.easing === 'easeInOut' ? `(${tExpr})*(${tExpr})*(3-2*(${tExpr}))` : tExpr
+
+        const zExpr = `${startScale.toFixed(6)}+(${(endScale - startScale).toFixed(6)})*(${easedT})`
+        const fxExpr = `${startFx.toFixed(6)}+(${(endFx - startFx).toFixed(6)})*(${easedT})`
+        const fyExpr = `${startFy.toFixed(6)}+(${(endFy - startFy).toFixed(6)})*(${easedT})`
+
+        chain += `,scale=w='ceil(iw*(${zExpr}))':h='ceil(ih*(${zExpr}))':eval=frame`
+        chain += `,crop=${width}:${height}:x='max(0,min(iw-ow,iw*(${fxExpr})/100-ow/2))':y='max(0,min(ih-oh,ih*(${fyExpr})/100-oh/2))':eval=frame`
+      }
+
       if (seg.flipH) chain += ',hflip'
       if (seg.flipV) chain += ',vflip'
+
+      chain += ',setsar=1'
       chain += `[v${i}]`
       filterParts.push(chain)
       idx++
@@ -47,9 +70,31 @@ export function buildVideoFilterGraph(
       let chain = `[${idx}:v]trim=start=${seg.trimStart.toFixed(6)}:end=${trimEnd.toFixed(6)},setpts=PTS-STARTPTS`
       if (seg.speed !== 1) chain += `,setpts=PTS/${seg.speed.toFixed(6)}`
       if (seg.reversed) chain += ',reverse'
-      chain += `,scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:-1:-1:color=black,setsar=1`
+      chain += `,scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:-1:-1:color=black`
+
+      if (seg.motion?.type === 'ken_burns') {
+        const startScale = Math.max(1, seg.motion.start.scale)
+        const endScale = Math.max(1, seg.motion.end.scale)
+        const startFx = Math.max(0, Math.min(100, seg.motion.start.focusX))
+        const endFx = Math.max(0, Math.min(100, seg.motion.end.focusX))
+        const startFy = Math.max(0, Math.min(100, seg.motion.start.focusY))
+        const endFy = Math.max(0, Math.min(100, seg.motion.end.focusY))
+
+        const durExpr = Math.max(0.001, seg.duration).toFixed(6)
+        const tExpr = `min(1,max(0,t/${durExpr}))`
+        const easedT = seg.motion.easing === 'easeInOut' ? `(${tExpr})*(${tExpr})*(3-2*(${tExpr}))` : tExpr
+
+        const zExpr = `${startScale.toFixed(6)}+(${(endScale - startScale).toFixed(6)})*(${easedT})`
+        const fxExpr = `${startFx.toFixed(6)}+(${(endFx - startFx).toFixed(6)})*(${easedT})`
+        const fyExpr = `${startFy.toFixed(6)}+(${(endFy - startFy).toFixed(6)})*(${easedT})`
+
+        chain += `,scale=w='ceil(iw*(${zExpr}))':h='ceil(ih*(${zExpr}))':eval=frame`
+        chain += `,crop=${width}:${height}:x='max(0,min(iw-ow,iw*(${fxExpr})/100-ow/2))':y='max(0,min(ih-oh,ih*(${fyExpr})/100-oh/2))':eval=frame`
+      }
+
       if (seg.flipH) chain += ',hflip'
       if (seg.flipV) chain += ',vflip'
+      chain += ',setsar=1'
       chain += `[v${i}]`
       filterParts.push(chain)
       idx++

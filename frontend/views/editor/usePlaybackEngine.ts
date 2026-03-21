@@ -153,7 +153,7 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams) {
     }
     
     const STATE_UPDATE_INTERVAL = 250 // ~4fps for React state updates (playhead/video/audio are smooth via rAF+DOM, this is only for timecode display)
-    const DISSOLVE_STATE_UPDATE_INTERVAL = 33 // ~30fps during dissolves for smooth crossfade
+    const SMOOTH_STATE_UPDATE_INTERVAL = 33 // ~30fps for smooth overlays/motion (crossfade / Ken Burns)
     lastStateUpdateRef.current = 0
     
     const tick = (timestamp: number) => {
@@ -386,6 +386,12 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams) {
             }
           }
         }
+      } else if (syncClip && syncClip.asset?.type === 'image') {
+        // Switching to an image clip: keep the video pool visible (paused) until React renders the <img>.
+        // Otherwise we can flash black because currentTime state is throttled while the rAF advances.
+        if (poolContainer) poolContainer.classList.remove('hidden')
+        const curVid = pool.get(activePoolSrcRef.current)
+        if (curVid && !curVid.paused) curVid.pause()
       } else {
         // No video clip at this time — pause current pool video (keep last frame), hide pool
         if (poolContainer) poolContainer.classList.add('hidden')
@@ -546,7 +552,8 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams) {
       // ── 6. Throttled React state sync for UI ──
       // During dissolves, update React state much more frequently (~30fps) so the
       // crossDissolveState opacity crossfade is smooth. Otherwise use ~4fps.
-      const updateInterval = dissolveInfo ? DISSOLVE_STATE_UPDATE_INTERVAL : STATE_UPDATE_INTERVAL
+      const needsSmoothState = Boolean(dissolveInfo) || syncClip?.motion?.type === 'ken_burns'
+      const updateInterval = needsSmoothState ? SMOOTH_STATE_UPDATE_INTERVAL : STATE_UPDATE_INTERVAL
       if (timestamp - lastStateUpdateRef.current >= updateInterval) {
         lastStateUpdateRef.current = timestamp
         setCurrentTime(next)

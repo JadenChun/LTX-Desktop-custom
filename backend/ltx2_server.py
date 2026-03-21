@@ -99,7 +99,7 @@ if use_sage_attention:
 # Constants & Paths
 # ============================================================
 
-PORT = 0
+PORT = 8765
 
 
 def _get_device() -> torch.device:
@@ -305,6 +305,14 @@ if __name__ == "__main__":
         if server.started:
             # Machine-parseable ready message — Electron matches this line
             print(f"Server running on http://127.0.0.1:{actual_port}", flush=True)
+            # MCP connection info for AI agents
+            print("", flush=True)
+            print("=" * 60, flush=True)
+            print("  MCP Server ready for AI agents (no auth required)", flush=True)
+            print(f"  Streamable HTTP (Claude Code): http://127.0.0.1:{actual_port}/mcp", flush=True)
+            print(f"  SSE transport  (LM Studio):   http://127.0.0.1:{actual_port}/mcp-sse", flush=True)
+            print("=" * 60, flush=True)
+            print("", flush=True)
 
     server.startup = _startup_with_ready_msg  # type: ignore[assignment]
 

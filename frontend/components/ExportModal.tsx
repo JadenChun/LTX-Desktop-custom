@@ -274,6 +274,7 @@ export function ExportModal({ open, onClose, clips, tracks, timeline, projectNam
           trackIndex: c.trackIndex,
           muted: c.muted || false,
           volume: c.volume ?? 1,
+          motion: c.motion,
         }))
 
       // Compute subtitle data for burn-in
