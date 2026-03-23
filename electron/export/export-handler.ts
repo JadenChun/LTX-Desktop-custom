@@ -9,7 +9,7 @@ import { findFfmpegPath, runFfmpeg, urlToFilePath, stopExportProcess } from './f
 import { getMainWindow } from '../window'
 import { flattenTimeline } from './timeline'
 import type { ExportClip } from './timeline'
-import type { ExportSubtitle } from './video-filter'
+import type { ExportSubtitle, ExportTextOverlay } from './video-filter'
 import { buildVideoFilterGraph, generateAssContent } from './video-filter'
 import { mixAudioToPcm } from './audio-mix'
 
@@ -18,11 +18,12 @@ export function registerExportHandlers(): void {
     clips: ExportClip[]; outputPath: string; codec: string; width: number; height: number; fps: number; quality: number;
     letterbox?: { ratio: number; color: string; opacity: number };
     subtitles?: ExportSubtitle[];
+    textOverlays?: ExportTextOverlay[];
   }) => {
     const ffmpegPath = findFfmpegPath()
     if (!ffmpegPath) return { error: 'FFmpeg not found' }
 
-    const { clips, outputPath, codec, width, height, fps, quality, letterbox, subtitles } = data
+    const { clips, outputPath, codec, width, height, fps, quality, letterbox, subtitles, textOverlays } = data
 
     // Approve clip source paths (they are trusted project references that may
     // have been approved in a prior session before the in-memory set was cleared)
@@ -59,8 +60,8 @@ export function registerExportHandlers(): void {
 
     // Generate ASS subtitle file for burn-in (libass handles text wrapping natively)
     let assFilePath: string | undefined
-    if (subtitles && subtitles.length > 0) {
-      const assContent = generateAssContent(subtitles, width, height)
+    if ((subtitles && subtitles.length > 0) || (textOverlays && textOverlays.length > 0)) {
+      const assContent = generateAssContent(subtitles || [], textOverlays || [], width, height)
       assFilePath = path.join(tmpDir, `ltx-subs-${ts}.ass`)
       fs.writeFileSync(assFilePath, assContent, 'utf8')
     }

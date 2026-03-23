@@ -126,6 +126,46 @@ function isRealPath(p: string): boolean {
   return p.includes('/') || p.includes('\\') || /^[A-Za-z]:/.test(p)
 }
 
+function shouldApprovePath(p?: string | null): p is string {
+  if (!p) return false
+  const lower = p.toLowerCase()
+  if (lower.startsWith('blob:') || lower.startsWith('data:')) return false
+  if (lower.startsWith('file://')) return true
+  return isRealPath(p)
+}
+
+function collectProjectFileAccessPaths(project: Project): string[] {
+  const paths = new Set<string>()
+  const add = (p?: string | null) => {
+    if (shouldApprovePath(p)) paths.add(p)
+  }
+
+  for (const asset of project.assets) {
+    add(asset.path)
+    add(asset.url)
+    asset.takes?.forEach(take => {
+      add(take.path)
+      add(take.url)
+    })
+  }
+
+  project.timelines?.forEach(timeline => {
+    timeline.clips?.forEach(clip => {
+      add(clip.importedUrl)
+      if (clip.asset) {
+        add(clip.asset.path)
+        add(clip.asset.url)
+        clip.asset.takes?.forEach(take => {
+          add(take.path)
+          add(take.url)
+        })
+      }
+    })
+  })
+
+  return Array.from(paths)
+}
+
 // Recover broken blob URLs by rebuilding file:// URLs from stored paths
 function recoverAssetUrls(project: Project): Project {
   let changed = false
@@ -222,6 +262,7 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
   const mcpSaveTimersRef = useRef<Map<string, number>>(new Map())
   const mcpSavePendingRef = useRef<Map<string, Project>>(new Map())
   const mcpSaveInFlightRef = useRef<Set<string>>(new Set())
+  const lastApprovedPathsSignatureRef = useRef<string>('')
   
   // Mark as initialized after first render
   useEffect(() => {
@@ -530,16 +571,21 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
   
   const currentProject = projects.find(p => p.id === currentProjectId) || null
 
-  // Approve all asset file paths when a project is opened so Electron allows reading them
+  // Keep Electron path approvals in sync with all file-backed project media.
   useEffect(() => {
     if (!currentProject || !window.electronAPI?.approvePaths) return
-    const paths = currentProject.assets
-      .map(a => a.path)
-      .filter((p): p is string => !!p && !p.startsWith('blob:'))
-    if (paths.length > 0) {
-      window.electronAPI.approvePaths(paths).catch(() => {})
-    }
-  }, [currentProjectId])
+    const paths = collectProjectFileAccessPaths(currentProject)
+    if (paths.length === 0) return
+
+    const sortedPaths = [...paths].sort()
+    const signature = sortedPaths.join('\n')
+    if (signature === lastApprovedPathsSignatureRef.current) return
+    lastApprovedPathsSignatureRef.current = signature
+
+    window.electronAPI.approvePaths(sortedPaths).catch((e) => {
+      logger.info(`Failed to approve project paths: ${e}`)
+    })
+  }, [currentProject?.id, currentProject?.updatedAt])
 
   const createProject = useCallback((name: string): Project => {
     const defaultTimeline = createDefaultTimeline('Timeline 1')

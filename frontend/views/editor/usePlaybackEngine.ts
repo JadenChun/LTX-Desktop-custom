@@ -377,16 +377,23 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams) {
             const remainingInCurrent = (syncClip.startTime + syncClip.duration) - next
             if (remainingInCurrent < 1.5 && remainingInCurrent > 0) {
               const nextSrc = resolveClipSrcRef(nextClip)
-              const nextVideo = nextSrc ? pool.get(nextSrc) : null
-              if (nextVideo && nextVideo.readyState >= 1) {
-                const nextTargetTime = nextClip.reversed
-                  ? nextClip.trimStart + (nextVideo.duration || 0) - nextClip.trimStart - nextClip.trimEnd
-                  : nextClip.trimStart
-                if (!isNaN(nextTargetTime)) {
-                  if (typeof (nextVideo as any).fastSeek === 'function') (nextVideo as any).fastSeek(nextTargetTime)
-                  else nextVideo.currentTime = nextTargetTime
-                }
+              // Guard: pool is keyed by src (one <video> per URL). If the next clip shares
+              // the same source URL as the current clip, pre-seeking would jump the active
+              // element and briefly show a future frame.
+              if (nextSrc && nextSrc === clipSrc) {
                 preSeekDoneRef.current = nextClip.id
+              } else {
+                const nextVideo = nextSrc ? pool.get(nextSrc) : null
+                if (nextVideo && nextVideo.readyState >= 1) {
+                  const nextTargetTime = nextClip.reversed
+                    ? nextClip.trimStart + (nextVideo.duration || 0) - nextClip.trimStart - nextClip.trimEnd
+                    : nextClip.trimStart
+                  if (!isNaN(nextTargetTime)) {
+                    if (typeof (nextVideo as any).fastSeek === 'function') (nextVideo as any).fastSeek(nextTargetTime)
+                    else nextVideo.currentTime = nextTargetTime
+                  }
+                  preSeekDoneRef.current = nextClip.id
+                }
               }
             }
           }

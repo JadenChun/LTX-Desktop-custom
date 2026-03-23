@@ -284,8 +284,7 @@ export function ExportModal({
           colorCorrection: c.colorCorrection,
         }))
 
-      // Compute subtitle data for burn-in — font size is computed deterministically
-      // in generateAssContent based on export resolution, so no scaling needed here.
+      // Compute subtitle data for burn-in (optional toggle).
       const subtitleData = (burnSubtitles && timeline.subtitles) ? timeline.subtitles.map(sub => {
         const track = tracks[sub.trackIndex]
         const style = { ...DEFAULT_SUBTITLE_STYLE, ...(track?.subtitleStyle || {}), ...sub.style }
@@ -297,6 +296,45 @@ export function ExportModal({
           style
         }
       }) : []
+
+      // Text overlays are always part of the video timeline output (independent
+      // from subtitle burn-in toggle).
+      const textOverlayData = clips
+        .filter(c => c.type === 'text' && c.textStyle)
+        .filter(c => tracks[c.trackIndex]?.enabled !== false)
+        .map(c => {
+          const textStyle = c.textStyle!
+          return {
+            text: textStyle.text,
+            startTime: c.startTime,
+            endTime: c.startTime + c.duration,
+            trackIndex: c.trackIndex,
+            style: {
+              fontFamily: textStyle.fontFamily,
+              fontSize: textStyle.fontSize,
+              fontWeight: textStyle.fontWeight,
+              fontStyle: textStyle.fontStyle,
+              color: textStyle.color,
+              backgroundColor: textStyle.backgroundColor,
+              textAlign: textStyle.textAlign,
+              positionX: textStyle.positionX,
+              positionY: textStyle.positionY,
+              strokeColor: textStyle.strokeColor,
+              strokeWidth: textStyle.strokeWidth,
+              shadowColor: textStyle.shadowColor,
+              shadowBlur: textStyle.shadowBlur,
+              shadowOffsetX: textStyle.shadowOffsetX,
+              shadowOffsetY: textStyle.shadowOffsetY,
+              letterSpacing: textStyle.letterSpacing,
+              lineHeight: textStyle.lineHeight,
+              maxWidth: textStyle.maxWidth,
+              padding: textStyle.padding,
+              borderRadius: textStyle.borderRadius,
+              opacity: textStyle.opacity,
+            },
+          }
+        })
+        .sort((a, b) => a.trackIndex - b.trackIndex)
 
       setExportFrameInfo('Rendering...')
 
@@ -317,6 +355,7 @@ export function ExportModal({
         quality: settings.quality,
         letterbox: exportLetterbox || undefined,
         subtitles: subtitleData.length > 0 ? subtitleData : undefined,
+        textOverlays: textOverlayData.length > 0 ? textOverlayData : undefined,
       })
 
       window.electronAPI?.removeExportProgress()

@@ -12,6 +12,83 @@ import type { TimelineClip, Track, SubtitleClip } from '../../types/project'
 import { getClipEffectStyles, getClipMotionStyles, getTransitionBgColor, formatTime, getShortcutLabel, tooltipLabel, getMaskedEffectOverlays } from './video-editor-utils'
 import type { KeyboardLayout } from '../../lib/keyboard-shortcuts'
 
+function pickPrimaryFontFamily(fontFamily: string): string {
+  const first = fontFamily.split(',')[0].trim().replace(/^['"]|['"]$/g, '')
+  return first || 'Arial'
+}
+
+function estimateCharWidthPx(ch: string, fontSizePx: number): number {
+  if (ch === ' ') return fontSizePx * 0.33
+  if (/[\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]/.test(ch)) return fontSizePx * 1.0
+  if (/[A-Z]/.test(ch)) return fontSizePx * 0.62
+  if (/[a-z0-9]/.test(ch)) return fontSizePx * 0.54
+  if (/[.,;:!?'"`]/.test(ch)) return fontSizePx * 0.30
+  return fontSizePx * 0.55
+}
+
+function estimateTextWidthPx(text: string, fontSizePx: number, letterSpacingPx: number): number {
+  if (!text) return 0
+  let width = 0
+  for (let i = 0; i < text.length; i++) {
+    width += estimateCharWidthPx(text[i], fontSizePx)
+  }
+  width += Math.max(0, text.length - 1) * Math.max(0, letterSpacingPx)
+  return width
+}
+
+function wrapWordToWidth(word: string, maxWidthPx: number, fontSizePx: number, letterSpacingPx: number): string[] {
+  const chunks: string[] = []
+  let current = ''
+  for (const ch of word) {
+    const candidate = current + ch
+    if (current && estimateTextWidthPx(candidate, fontSizePx, letterSpacingPx) > maxWidthPx) {
+      chunks.push(current)
+      current = ch
+    } else {
+      current = candidate
+    }
+  }
+  if (current) chunks.push(current)
+  return chunks
+}
+
+function wrapTextForSafeArea(
+  text: string,
+  maxWidthPx: number,
+  fontSizePx: number,
+  letterSpacingPx: number,
+): string {
+  const paragraphs = text.split(/\r?\n/)
+  const wrappedParagraphs = paragraphs.map(paragraph => {
+    const words = paragraph.trim().split(/\s+/).filter(Boolean)
+    if (words.length === 0) return ''
+
+    const lines: string[] = []
+    let line = ''
+    for (const rawWord of words) {
+      const candidate = line ? `${line} ${rawWord}` : rawWord
+      if (estimateTextWidthPx(candidate, fontSizePx, letterSpacingPx) <= maxWidthPx) {
+        line = candidate
+        continue
+      }
+      if (line) {
+        lines.push(line)
+        line = ''
+      }
+      if (estimateTextWidthPx(rawWord, fontSizePx, letterSpacingPx) <= maxWidthPx) {
+        line = rawWord
+      } else {
+        const chunks = wrapWordToWidth(rawWord, maxWidthPx, fontSizePx, letterSpacingPx)
+        lines.push(...chunks.slice(0, -1))
+        line = chunks[chunks.length - 1] || ''
+      }
+    }
+    if (line) lines.push(line)
+    return lines.join('\n')
+  })
+  return wrappedParagraphs.join('\n')
+}
+
 export interface ProgramMonitorProps {
   // Layout
   showSourceMonitor: boolean
@@ -514,19 +591,49 @@ export function ProgramMonitor({
                 )
               })}
 
-              {/* Text overlay clips */}
+              {/* Text overlay clips constrained and wrapped like export-safe layout */}
               {activeTextClips.map(tc => {
                 const ts = tc.textStyle!
                 const isSelected = selectedClipIds.has(tc.id)
+                const frameWidth = videoFrameSize.width > 0 ? videoFrameSize.width : (previewAspectRatio === '9:16' ? 1080 : 1920)
+                const frameHeight = videoFrameSize.height > 0 ? videoFrameSize.height : (previewAspectRatio === '9:16' ? 1920 : 1080)
+                const frameScale = Math.min(frameWidth, frameHeight) / 1080
+                const fontFamily = pickPrimaryFontFamily(ts.fontFamily)
+                const fontSizePx = Math.max(1, Math.round(ts.fontSize * frameScale))
+                const letterSpacingPx = (ts.letterSpacing || 0) * frameScale
+                const letterSpacingCss = Math.abs(letterSpacingPx) > 0.001 ? `${letterSpacingPx.toFixed(2)}px` : undefined
+
+                const safeLeft = frameWidth * 0.15
+                const safeRight = frameWidth * 0.85
+                const safeWidth = Math.max(1, safeRight - safeLeft)
+                const maxWidthRatio = ts.maxWidth > 0 ? Math.max(0.01, Math.min(1, ts.maxWidth / 100)) : 1
+                const wrapWidth = Math.max(1, Math.min(safeWidth, frameWidth * maxWidthRatio))
+                const halfWrap = wrapWidth / 2
+                const unclampedX = (Math.max(0, Math.min(100, ts.positionX)) / 100) * frameWidth
+                const minX = safeLeft + halfWrap
+                const maxX = safeRight - halfWrap
+                const clampedX = minX <= maxX
+                  ? Math.max(minX, Math.min(maxX, unclampedX))
+                  : (safeLeft + safeRight) / 2
+                const clampedXPct = (clampedX / frameWidth) * 100
+
+                const wrappedText = wrapTextForSafeArea(
+                  ts.text,
+                  wrapWidth,
+                  fontSizePx,
+                  Math.max(0, letterSpacingPx),
+                )
+
                 return (
                   <div
                     key={`text-${tc.id}`}
                     className={`absolute z-[24] ${isSelected ? 'ring-2 ring-cyan-400/60 ring-offset-1 ring-offset-transparent' : ''}`}
                     style={{
-                      left: `${ts.positionX}%`,
+                      left: `${clampedXPct}%`,
                       top: `${ts.positionY}%`,
                       transform: 'translate(-50%, -50%)',
-                      maxWidth: ts.maxWidth > 0 ? `${ts.maxWidth}%` : undefined,
+                      width: `${wrapWidth}px`,
+                      maxWidth: `${wrapWidth}px`,
                       opacity: ts.opacity / 100,
                       pointerEvents: 'auto',
                       cursor: 'move',
@@ -535,15 +642,25 @@ export function ProgramMonitor({
                       e.stopPropagation()
                       clickedTextOverlayRef.current = true
                       setSelectedClipIds(new Set([tc.id]))
-                      // Capture panel state at mousedown time so we can restore it after any
-                      // spurious onClick handlers that might close it
                       const wasOpen = showPropertiesPanel
                       const clipId = tc.id
                       const container = (e.currentTarget.parentElement as HTMLElement)
                       if (!container) return
                       const rect = container.getBoundingClientRect()
                       const onMove = (ev: MouseEvent) => {
-                        const px = Math.max(0, Math.min(100, ((ev.clientX - rect.left) / rect.width) * 100))
+                        const currentSafeLeft = rect.width * 0.15
+                        const currentSafeRight = rect.width * 0.85
+                        const currentSafeWidth = Math.max(1, currentSafeRight - currentSafeLeft)
+                        const currentMaxWidthRatio = ts.maxWidth > 0 ? Math.max(0.01, Math.min(1, ts.maxWidth / 100)) : 1
+                        const currentWrapWidth = Math.max(1, Math.min(currentSafeWidth, rect.width * currentMaxWidthRatio))
+                        const currentHalfWrap = currentWrapWidth / 2
+                        const currentMinX = currentSafeLeft + currentHalfWrap
+                        const currentMaxX = currentSafeRight - currentHalfWrap
+                        const rawX = ev.clientX - rect.left
+                        const clampedXpx = currentMinX <= currentMaxX
+                          ? Math.max(currentMinX, Math.min(currentMaxX, rawX))
+                          : (currentSafeLeft + currentSafeRight) / 2
+                        const px = (clampedXpx / rect.width) * 100
                         const py = Math.max(0, Math.min(100, ((ev.clientY - rect.top) / rect.height) * 100))
                         setClips(prev => prev.map(c =>
                           c.id === tc.id && c.textStyle
@@ -554,7 +671,6 @@ export function ProgramMonitor({
                       const onUp = () => {
                         window.removeEventListener('mousemove', onMove)
                         window.removeEventListener('mouseup', onUp)
-                        // Reset the ref and restore state after all click events have fired
                         requestAnimationFrame(() => {
                           clickedTextOverlayRef.current = false
                           setSelectedClipIds(new Set([clipId]))
@@ -573,29 +689,29 @@ export function ProgramMonitor({
                   >
                     <div
                       style={{
-                        fontFamily: ts.fontFamily,
-                        fontSize: `${ts.fontSize * 0.05}vh`,
+                        fontFamily,
+                        fontSize: `${fontSizePx}px`,
                         fontWeight: ts.fontWeight,
                         fontStyle: ts.fontStyle,
                         color: ts.color,
                         backgroundColor: ts.backgroundColor,
                         textAlign: ts.textAlign,
-                        padding: ts.padding > 0 ? `${ts.padding * 0.04}vh` : undefined,
-                        borderRadius: ts.borderRadius > 0 ? `${ts.borderRadius}px` : undefined,
-                        letterSpacing: ts.letterSpacing !== 0 ? `${ts.letterSpacing}px` : undefined,
+                        padding: ts.padding > 0 ? `${Math.max(0, ts.padding * frameScale)}px` : undefined,
+                        borderRadius: ts.borderRadius > 0 ? `${Math.max(0, ts.borderRadius * frameScale)}px` : undefined,
+                        letterSpacing: letterSpacingCss,
                         lineHeight: ts.lineHeight,
                         textShadow: ts.shadowBlur > 0 || ts.shadowOffsetX !== 0 || ts.shadowOffsetY !== 0
-                          ? `${ts.shadowOffsetX}px ${ts.shadowOffsetY}px ${ts.shadowBlur}px ${ts.shadowColor}`
+                          ? `${ts.shadowOffsetX * frameScale}px ${ts.shadowOffsetY * frameScale}px ${ts.shadowBlur * frameScale}px ${ts.shadowColor}`
                           : undefined,
                         WebkitTextStroke: ts.strokeWidth > 0 && ts.strokeColor !== 'transparent'
-                          ? `${ts.strokeWidth}px ${ts.strokeColor}`
+                          ? `${ts.strokeWidth * frameScale}px ${ts.strokeColor}`
                           : undefined,
                         whiteSpace: 'pre-wrap',
                         wordBreak: 'break-word',
                         userSelect: 'none',
                       }}
                     >
-                      {ts.text}
+                      {wrappedText}
                     </div>
                   </div>
                 )

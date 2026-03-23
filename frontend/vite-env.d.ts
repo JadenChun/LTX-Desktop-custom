@@ -48,6 +48,7 @@ interface Window {
       outputPath: string; codec: string; width: number; height: number; fps: number; quality: number
       letterbox?: { ratio: number; color: string; opacity: number }
       subtitles?: { text: string; startTime: number; endTime: number; style: { fontSize: number; fontFamily: string; fontWeight: string; color: string; backgroundColor: string; position: string; italic: boolean } }[]
+      textOverlays?: { text: string; startTime: number; endTime: number; trackIndex: number; style: { fontFamily: string; fontSize: number; fontWeight: string; fontStyle: string; color: string; backgroundColor: string; textAlign: string; positionX: number; positionY: number; strokeColor: string; strokeWidth: number; shadowColor: string; shadowBlur: number; shadowOffsetX: number; shadowOffsetY: number; letterSpacing: number; lineHeight: number; maxWidth: number; padding: number; borderRadius: number; opacity: number } }[]
     }) => Promise<{ success?: boolean; error?: string }>
     exportCancel: (sessionId: string) => Promise<{ ok?: boolean }>
     onExportProgress: (cb: (percent: number) => void) => void
