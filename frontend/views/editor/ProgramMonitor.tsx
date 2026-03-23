@@ -2,7 +2,7 @@ import React from 'react'
 import {
   Layers, Video, ChevronDown,
   ChevronLeft, ChevronRight, Pause, Play, Repeat,
-  Expand, Shrink,
+  Expand, Shrink, Smartphone, Monitor,
 } from 'lucide-react'
 import { Button } from '../../components/ui/button'
 import { Tooltip } from '../../components/ui/tooltip'
@@ -91,6 +91,10 @@ export interface ProgramMonitorProps {
   isFullscreen: boolean
   toggleFullscreen: () => void
 
+  // Preview aspect ratio
+  previewAspectRatio: '16:9' | '9:16'
+  setPreviewAspectRatio: React.Dispatch<React.SetStateAction<'16:9' | '9:16'>>
+
   // Keyboard shortcuts
   kbLayout: KeyboardLayout
 }
@@ -147,6 +151,8 @@ export function ProgramMonitor({
   setPlaybackResOpen,
   isFullscreen,
   toggleFullscreen,
+  previewAspectRatio,
+  setPreviewAspectRatio,
   kbLayout,
 }: ProgramMonitorProps) {
   // Flag to prevent the video frame wrapper's onClick from clearing selection
@@ -224,7 +230,7 @@ export function ProgramMonitor({
               {/* Video frame wrapper — black bg with exact 16:9 dimensions */}
               <div
                 className="relative bg-black overflow-hidden"
-                style={videoFrameSize.width > 0 ? { width: videoFrameSize.width, height: videoFrameSize.height } : { width: '100%', aspectRatio: '16/9' }}
+                style={videoFrameSize.width > 0 ? { width: videoFrameSize.width, height: videoFrameSize.height } : { width: '100%', aspectRatio: previewAspectRatio === '9:16' ? '9/16' : '16/9' }}
                 onClick={() => {
                   if (clickedTextOverlayRef.current) {
                     return
@@ -612,7 +618,7 @@ export function ProgramMonitor({
                         <span
                           className="inline-block max-w-[90%] text-center mx-auto rounded px-3 py-1.5 leading-snug whitespace-pre-wrap"
                           style={{
-                            fontSize: `${style.fontSize}px`,
+                            fontSize: `${Math.round(Math.min(videoFrameSize.width, videoFrameSize.height) * (videoFrameSize.height > videoFrameSize.width ? 0.08 : 0.05))}px`,
                             fontFamily: style.fontFamily,
                             fontWeight: style.fontWeight,
                             fontStyle: style.italic ? 'italic' : 'normal',
@@ -991,6 +997,24 @@ export function ProgramMonitor({
               </div>
             )}
           </div>
+
+          {/* Aspect Ratio Toggle */}
+          <Tooltip content={previewAspectRatio === '16:9' ? 'Switch to Vertical (9:16)' : 'Switch to Horizontal (16:9)'} side="top">
+            <button
+              onClick={() => setPreviewAspectRatio(prev => prev === '16:9' ? '9:16' : '16:9')}
+              className={`h-6 px-2 rounded text-[11px] font-medium flex items-center gap-1 transition-colors border ${
+                previewAspectRatio === '9:16'
+                  ? 'bg-purple-900/30 text-purple-400 border-purple-700/50 hover:border-purple-600'
+                  : 'bg-zinc-900 text-zinc-400 border-zinc-700 hover:border-zinc-600'
+              }`}
+              title="Preview aspect ratio"
+            >
+              {previewAspectRatio === '9:16'
+                ? <><Smartphone className="h-3 w-3" /> 9:16</>
+                : <><Monitor className="h-3 w-3" /> 16:9</>
+              }
+            </button>
+          </Tooltip>
 
           {/* Fullscreen */}
           <Tooltip content={isFullscreen ? tooltipLabel('Exit fullscreen', getShortcutLabel(kbLayout, 'view.fullscreen')) : tooltipLabel('Fullscreen', getShortcutLabel(kbLayout, 'view.fullscreen'))} side="top">

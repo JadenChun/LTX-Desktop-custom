@@ -75,7 +75,7 @@ export interface SubtitleStyle {
 }
 
 export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
-  fontSize: 32,
+  fontSize: 28,
   fontFamily: 'sans-serif',
   fontWeight: 'normal',
   color: '#FFFFFF',
@@ -440,10 +440,10 @@ export type ProjectTab = 'gen-space' | 'video-editor'
 
 // Default tracks for new timelines
 export const DEFAULT_TRACKS: Track[] = [
-  { id: 'track-v1', name: 'V1', muted: false, locked: false, sourcePatched: true,  kind: 'video' },
+  { id: 'track-v1', name: 'V1', muted: false, locked: false, sourcePatched: true, kind: 'video' },
   { id: 'track-v2', name: 'V2', muted: false, locked: false, sourcePatched: false, kind: 'video' },
   { id: 'track-v3', name: 'V3', muted: false, locked: false, sourcePatched: false, kind: 'video' },
-  { id: 'track-a1', name: 'A1', muted: false, locked: false, sourcePatched: true,  kind: 'audio' },
+  { id: 'track-a1', name: 'A1', muted: false, locked: false, sourcePatched: true, kind: 'audio' },
   { id: 'track-a2', name: 'A2', muted: false, locked: false, sourcePatched: false, kind: 'audio' },
 ]
 

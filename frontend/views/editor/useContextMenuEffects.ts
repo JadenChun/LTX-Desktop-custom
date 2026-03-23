@@ -34,6 +34,7 @@ interface UseContextMenuEffectsParams {
   setVideoFrameSize: React.Dispatch<React.SetStateAction<{ width: number; height: number }>>
   timelineAddMenuOpen: boolean
   setTimelineAddMenuOpen: (v: boolean) => void
+  previewAspectRatio: '16:9' | '9:16'
   creatingBin: boolean
   newBinInputRef: React.RefObject<HTMLInputElement>
 }
@@ -50,6 +51,7 @@ export function useContextMenuEffects(params: UseContextMenuEffectsParams) {
     previewZoom, setPreviewZoom, setPreviewPan,
     previewContainerRef, setIsFullscreen, setVideoFrameSize,
     timelineAddMenuOpen, setTimelineAddMenuOpen,
+    previewAspectRatio,
     creatingBin, newBinInputRef,
   } = params
 
@@ -182,11 +184,11 @@ export function useContextMenuEffects(params: UseContextMenuEffectsParams) {
     return () => el.removeEventListener('wheel', handler)
   }, [])
   
-  // Observe preview container size → compute video frame dimensions (16:9 "contain" fit)
+  // Observe preview container size → compute video frame dimensions (dynamic aspect ratio "contain" fit)
   useEffect(() => {
     const el = previewContainerRef.current
     if (!el) return
-    const PROJECT_RATIO = 16 / 9
+    const PROJECT_RATIO = previewAspectRatio === '9:16' ? 9 / 16 : 16 / 9
     const compute = () => {
       const { width, height } = el.getBoundingClientRect()
       if (width === 0 || height === 0) return
@@ -206,7 +208,7 @@ export function useContextMenuEffects(params: UseContextMenuEffectsParams) {
     const observer = new ResizeObserver(compute)
     observer.observe(el)
     return () => observer.disconnect()
-  }, [])
+  }, [previewAspectRatio])
 
   // Close asset context menu on click elsewhere
   useEffect(() => {

@@ -72,8 +72,20 @@ export function urlToFilePath(url: string): string {
   return url
 }
 
-/** Run an ffmpeg command and return a promise. Logs stderr and sets activeExportProcess. */
-export function runFfmpeg(ffmpegPath: string, args: string[]): Promise<{ success: boolean; error?: string }> {
+/** Parse FFmpeg's time= output into seconds */
+function parseTimeToSeconds(timeStr: string): number {
+  const match = timeStr.match(/(\d+):(\d+):(\d+(?:\.\d+)?)/)
+  if (!match) return 0
+  return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3])
+}
+
+/** Run an ffmpeg command and return a promise. Logs stderr and sets activeExportProcess.
+ *  onProgress is called with elapsed seconds parsed from FFmpeg's time= output. */
+export function runFfmpeg(
+  ffmpegPath: string,
+  args: string[],
+  onProgress?: (timeSec: number) => void,
+): Promise<{ success: boolean; error?: string }> {
   return new Promise((resolve) => {
     logger.info( `[ffmpeg] spawn: ${args.join(' ').slice(0, 400)}`)
     const proc = spawn(ffmpegPath, args, { stdio: ['pipe', 'pipe', 'pipe'] })
@@ -86,6 +98,13 @@ export function runFfmpeg(ffmpegPath: string, args: string[]): Promise<{ success
       for (const line of lines) {
         if (line.includes('frame=') || line.includes('Error') || line.includes('error')) {
           logger.info( `[ffmpeg] ${line.trim().slice(0, 200)}`)
+        }
+        // Parse time= for progress reporting
+        if (onProgress) {
+          const timeMatch = line.match(/time=\s*([\d:.]+)/)
+          if (timeMatch) {
+            onProgress(parseTimeToSeconds(timeMatch[1]))
+          }
         }
       }
     })

@@ -286,6 +286,8 @@ export function VideoEditor() {
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [playbackResolution, setPlaybackResolution] = useState<1 | 0.5 | 0.25>(0.5) // Playback quality: 1=Full, 0.5=Half, 0.25=Quarter
   const [playbackResOpen, setPlaybackResOpen] = useState(false)
+  // Preview aspect ratio: 16:9 (landscape) or 9:16 (vertical/portrait)
+  const [previewAspectRatio, setPreviewAspectRatio] = useState<'16:9' | '9:16'>('16:9')
   // Computed video frame dimensions (object-fit:contain equivalent for a div)
   const [videoFrameSize, setVideoFrameSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 })
   
@@ -311,10 +313,13 @@ export function VideoEditor() {
   const previewPanRef = useRef({ dragging: false, startX: 0, startY: 0, startPanX: 0, startPanY: 0 })
   const renameInputRef = useRef<HTMLInputElement>(null)
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const syncingFromContextRef = useRef(false)
   
   // Keep performance refs in sync with state (cheap assignments, no re-renders)
   useEffect(() => { clipsRef.current = clips }, [clips])
   useEffect(() => { tracksRef.current = tracks }, [tracks])
+  const subtitlesRef = useRef(subtitles)
+  useEffect(() => { subtitlesRef.current = subtitles }, [subtitles])
   useEffect(() => { isPlayingRef.current = isPlaying }, [isPlaying])
   useEffect(() => { shuttleSpeedRef.current = shuttleSpeed }, [shuttleSpeed])
   // Only sync ref ← state when NOT playing (during playback, ref is authoritative)
@@ -447,6 +452,7 @@ export function VideoEditor() {
     subtitleTrackStyleIdx, setSubtitleTrackStyleIdx,
     subtitleFileInputRef,
     addSubtitleTrack, addSubtitleClip, updateSubtitle, deleteSubtitle,
+    splitSubtitleProgressive, splitAllSubtitlesProgressive,
     handleImportSrt, handleExportSrt,
   } = useSubtitleOperations({
     subtitles, setSubtitles, tracks, setTracks, setClips,
@@ -626,10 +632,8 @@ export function VideoEditor() {
     return primary ?? first
   })()
   
-  const totalDuration = Math.max(
-    clips.reduce((max, clip) => Math.max(max, clip.startTime + clip.duration), 0),
-    30
-  )
+  const contentDuration = clips.reduce((max, clip) => Math.max(max, clip.startTime + clip.duration), 0)
+  const totalDuration = Math.max(contentDuration, 30)
   
   const pixelsPerSecond = 100 * zoom
 
@@ -744,34 +748,78 @@ export function VideoEditor() {
   
   // --- Sync local state with active timeline from context ---
   
-  // When the active timeline changes (switch or first load), load its data locally
+  // Sync local editor state with context timeline data.
+  // Handles both timeline switches and external same-timeline updates (e.g. MCP edits).
   useEffect(() => {
     if (!activeTimeline) return
-    if (loadedTimelineIdRef.current === activeTimeline.id) return // Already loaded
-    
+
+    const incomingClips = (activeTimeline.clips || []).map(migrateClip)
+    const incomingTracks = migrateTracks(
+      activeTimeline.tracks?.length > 0 ? activeTimeline.tracks : DEFAULT_TRACKS.map(t => ({ ...t })),
+    )
+    const incomingSubtitles = activeTimeline.subtitles || []
+    const loadedTimelineId = loadedTimelineIdRef.current
+    const isTimelineSwitch = loadedTimelineId !== activeTimeline.id
+
     // Save current timeline before switching (if we had one loaded)
-    if (loadedTimelineIdRef.current && currentProjectId) {
+    if (isTimelineSwitch && loadedTimelineId && currentProjectId) {
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
-      updateTimeline(currentProjectId, loadedTimelineIdRef.current, { clips, tracks, subtitles })
+      updateTimeline(currentProjectId, loadedTimelineId, {
+        clips: clipsRef.current,
+        tracks: tracksRef.current,
+        subtitles: subtitlesRef.current,
+      })
     }
-    
-    // Load new timeline (migrate old clips without new effect fields)
-    setClips((activeTimeline.clips || []).map(migrateClip))
-    setTracks(migrateTracks(activeTimeline.tracks?.length > 0 ? activeTimeline.tracks : DEFAULT_TRACKS.map(t => ({ ...t }))))
-    setSubtitles(activeTimeline.subtitles || [])
-    setCurrentTime(0)
+
+    // Same timeline ID: only hydrate when external changes actually differ from local working state.
+    if (!isTimelineSwitch) {
+      const clipsChanged = JSON.stringify(incomingClips) !== JSON.stringify(clipsRef.current)
+      const tracksChanged = JSON.stringify(incomingTracks) !== JSON.stringify(tracksRef.current)
+      const subtitlesChanged = JSON.stringify(incomingSubtitles) !== JSON.stringify(subtitlesRef.current)
+      if (!clipsChanged && !tracksChanged && !subtitlesChanged) return
+    }
+
+    syncingFromContextRef.current = true
+    setClips(incomingClips)
+    setTracks(incomingTracks)
+    setSubtitles(incomingSubtitles)
+
+    if (isTimelineSwitch) {
+      setCurrentTime(0)
+      setSelectedClipIds(new Set())
+      setSelectedSubtitleId(null)
+      undoStackRef.current = []
+      redoStackRef.current = []
+      loadedTimelineIdRef.current = activeTimeline.id
+    } else {
+      // External refresh: keep selection only if items still exist.
+      const clipIds = new Set(incomingClips.map(c => c.id))
+      setSelectedClipIds(prev => {
+        const next = new Set<string>()
+        let changed = false
+        for (const id of prev) {
+          if (clipIds.has(id)) next.add(id)
+          else changed = true
+        }
+        return changed ? next : prev
+      })
+      setSelectedSubtitleId(prev => {
+        if (!prev) return null
+        return incomingSubtitles.some(s => s.id === prev) ? prev : null
+      })
+    }
+
     setIsPlaying(false)
     setPlayingInOut(false)
-    setSelectedClipIds(new Set())
-    setSelectedSubtitleId(null)
-    undoStackRef.current = []
-    redoStackRef.current = []
-    loadedTimelineIdRef.current = activeTimeline.id
-  }, [activeTimeline?.id])
+  }, [activeTimeline, currentProjectId, updateTimeline])
   
   // Debounced auto-save: when clips, tracks, or subtitles change, schedule a save
   useEffect(() => {
     if (!currentProjectId || !loadedTimelineIdRef.current) return
+    if (syncingFromContextRef.current) {
+      syncingFromContextRef.current = false
+      return
+    }
     
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
     autoSaveTimerRef.current = setTimeout(() => {
@@ -781,7 +829,7 @@ export function VideoEditor() {
     return () => {
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
     }
-  }, [clips, tracks, subtitles, currentProjectId])
+  }, [clips, tracks, subtitles, currentProjectId, updateTimeline])
   
   // Save on unmount
   useEffect(() => {
@@ -962,6 +1010,18 @@ export function VideoEditor() {
     const usableMedia = mediaDuration - clip.trimStart - clip.trimEnd
     return Math.max(0.5, usableMedia / clip.speed)
   }, [])
+
+  const presetSpeeds = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 4]
+  const applySpeedToClip = useCallback((clip: TimelineClip, requestedSpeed: number) => {
+    if (!Number.isFinite(requestedSpeed) || requestedSpeed < 0.25) return
+    const newSpeed = Math.min(requestedSpeed, 100)
+    const oldSpeed = clip.speed
+    let newDuration = clip.duration * (oldSpeed / newSpeed)
+    const maxDur = getMaxClipDuration({ ...clip, speed: newSpeed })
+    newDuration = Math.min(newDuration, maxDur)
+    newDuration = Math.max(0.5, newDuration)
+    updateClip(clip.id, { speed: newSpeed, duration: newDuration })
+  }, [getMaxClipDuration, updateClip])
 
 
   const resolveClipSrc = useCallback((clip: TimelineClip | null): string => {
@@ -1184,7 +1244,7 @@ export function VideoEditor() {
     centerOnPlayheadRef, clipsRef, tracksRef, assetsRef,
     playheadOverlayRef, playheadRulerRef, lastStateUpdateRef,
     preSeekDoneRef, rafActiveClipIdRef, setPlaybackActiveClipId,
-    inPoint, outPoint, totalDuration, zoom,
+    inPoint, outPoint, totalDuration, contentDuration, zoom,
   })
 
   
@@ -1449,6 +1509,7 @@ export function VideoEditor() {
     previewZoom, setPreviewZoom, setPreviewPan,
     previewContainerRef, setIsFullscreen, setVideoFrameSize,
     timelineAddMenuOpen, setTimelineAddMenuOpen,
+    previewAspectRatio,
     creatingBin, newBinInputRef,
   })
 
@@ -2008,6 +2069,8 @@ export function VideoEditor() {
             setPlaybackResOpen={setPlaybackResOpen}
             isFullscreen={isFullscreen}
             toggleFullscreen={toggleFullscreen}
+            previewAspectRatio={previewAspectRatio}
+            setPreviewAspectRatio={setPreviewAspectRatio}
             kbLayout={kbLayout}
           />
         </div> {/* end split preview area */}
@@ -2682,7 +2745,14 @@ export function VideoEditor() {
                                   if (confirm(`Delete subtitle track "${track.name}"?`)) {
                                     pushTrackUndo()
                                     setTracks(tracks.filter((_, i) => i !== realIndex))
-                                    setSubtitles(prev => prev.filter(s => s.trackIndex !== realIndex))
+                                    setClips(prev => prev
+                                      .filter(c => c.trackIndex !== realIndex)
+                                      .map(c => c.trackIndex > realIndex ? { ...c, trackIndex: c.trackIndex - 1 } : c)
+                                    )
+                                    setSubtitles(prev => prev
+                                      .filter(s => s.trackIndex !== realIndex)
+                                      .map(s => s.trackIndex > realIndex ? { ...s, trackIndex: s.trackIndex - 1 } : s)
+                                    )
                                   }
                                 }}
                                 className="p-0.5 rounded text-zinc-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
@@ -3753,25 +3823,29 @@ export function VideoEditor() {
                 <select
                   value={selectedClip.speed}
                   onChange={(e) => {
-                    const newSpeed = parseFloat(e.target.value)
-                    const oldSpeed = selectedClip.speed
-                    let newDuration = selectedClip.duration * (oldSpeed / newSpeed)
-                    const maxDur = getMaxClipDuration({ ...selectedClip, speed: newSpeed })
-                    newDuration = Math.min(newDuration, maxDur)
-                    newDuration = Math.max(0.5, newDuration)
-                    updateClip(selectedClip.id, { speed: newSpeed, duration: newDuration })
+                    applySpeedToClip(selectedClip, parseFloat(e.target.value))
                   }}
                   className="bg-zinc-800 border border-zinc-700 rounded px-1.5 py-0.5 text-[10px] text-white"
                 >
-                  <option value={0.25}>0.25x</option>
-                  <option value={0.5}>0.5x</option>
-                  <option value={0.75}>0.75x</option>
-                  <option value={1}>1x</option>
-                  <option value={1.25}>1.25x</option>
-                  <option value={1.5}>1.5x</option>
-                  <option value={2}>2x</option>
-                  <option value={4}>4x</option>
+                  {!presetSpeeds.includes(selectedClip.speed) && (
+                    <option value={selectedClip.speed}>{selectedClip.speed}x (Custom)</option>
+                  )}
+                  {presetSpeeds.map((speed) => (
+                    <option key={speed} value={speed}>{speed}x</option>
+                  ))}
                 </select>
+                <input
+                  type="number"
+                  min={0.25}
+                  max={100}
+                  step={0.25}
+                  value={selectedClip.speed}
+                  onChange={(e) => {
+                    applySpeedToClip(selectedClip, parseFloat(e.target.value))
+                  }}
+                  className="w-14 bg-zinc-800 border border-zinc-700 rounded px-1.5 py-0.5 text-[10px] text-white text-right [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                  title="Custom clip speed"
+                />
               </div>
             </>
           )}
@@ -3810,6 +3884,17 @@ export function VideoEditor() {
                 >
                   <FileDown className="h-3 w-3" />
                   Export SRT
+                </button>
+                <button
+                  onClick={() => {
+                    const subTrackIdx = tracks.findIndex(t => t.type === 'subtitle')
+                    if (subTrackIdx !== -1) splitAllSubtitlesProgressive(subTrackIdx)
+                  }}
+                  disabled={subtitles.length === 0}
+                  className="h-6 px-2 rounded bg-amber-900/30 border border-amber-700/30 text-amber-400 hover:bg-amber-900/50 text-[10px] flex items-center gap-1 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Split all long subtitles into short progressive chunks (~4 words each)"
+                >
+                  Split All
                 </button>
               </div>
               <input
@@ -3898,6 +3983,7 @@ export function VideoEditor() {
               onResizeDragStart={(e) => handleResizeDragStart('right', e)}
               updateSubtitle={updateSubtitle}
               deleteSubtitle={deleteSubtitle}
+              splitSubtitleProgressive={splitSubtitleProgressive}
             />
           )
         })()}

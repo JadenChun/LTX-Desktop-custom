@@ -9,8 +9,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Get the path where models are stored
   getModelsPath: (): Promise<string> => ipcRenderer.invoke('get-models-path'),
   
+  // Approve file paths for access (e.g. when loading a saved project)
+  approvePaths: (filePaths: string[]): Promise<void> =>
+    ipcRenderer.invoke('approve-paths', filePaths),
+
   // Read a local file and return as base64
-  readLocalFile: (filePath: string): Promise<{ data: string; mimeType: string }> => 
+  readLocalFile: (filePath: string): Promise<{ data: string; mimeType: string }> =>
     ipcRenderer.invoke('read-local-file', filePath),
   
   // Check GPU availability
@@ -83,6 +87,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('export-native', data),
   exportCancel: (sessionId: string): Promise<{ ok?: boolean }> =>
     ipcRenderer.invoke('export-cancel', sessionId),
+  onExportProgress: (cb: (percent: number) => void) => {
+    ipcRenderer.on('export-progress', (_: unknown, percent: number) => cb(percent))
+  },
+  removeExportProgress: () => {
+    ipcRenderer.removeAllListeners('export-progress')
+  },
 
   // Python setup (Windows first-launch download)
   checkPythonReady: (): Promise<{ ready: boolean }> => ipcRenderer.invoke('check-python-ready'),
@@ -177,6 +187,8 @@ declare global {
         subtitles?: { text: string; startTime: number; endTime: number; style: { fontSize: number; fontFamily: string; fontWeight: string; color: string; backgroundColor: string; position: string; italic: boolean } }[];
       }) => Promise<{ success?: boolean; error?: string }>
       exportCancel: (sessionId: string) => Promise<{ ok?: boolean }>
+      onExportProgress: (cb: (percent: number) => void) => void
+      removeExportProgress: () => void
       checkPythonReady: () => Promise<{ ready: boolean }>
       startPythonSetup: () => Promise<void>
       startPythonBackend: () => Promise<void>

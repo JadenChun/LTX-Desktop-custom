@@ -407,3 +407,88 @@ def register_timeline_tools(mcp: FastMCP, store: "ProjectStore") -> None:
             raise ValueError("Provide at least one of: amount, intensity, radius")
         clip, effect = store.update_clip_effect(clip_id, effect_id, params)
         return {"clip": clip.model_dump(), "effect": effect.model_dump()}
+
+    @mcp.tool()
+    async def update_clip(
+        clip_id: str,
+        start_time: float | None = None,
+        duration: float | None = None,
+        trim_start: float | None = None,
+        trim_end: float | None = None,
+        track_index: int | None = None,
+        muted: bool | None = None,
+        volume: float | None = None,
+        speed: float | None = None,
+        reversed: bool | None = None,
+        opacity: float | None = None,
+        flip_h: bool | None = None,
+        flip_v: bool | None = None,
+    ) -> dict[str, Any]:
+        """Update one or more properties of a clip in a single call.
+
+        Only the parameters you provide are changed. This is a convenience
+        wrapper — for validated operations (speed changes with duration
+        recalculation), prefer the dedicated tools.
+
+        Args:
+            clip_id:     The clip id to modify.
+            start_time:  New timeline position (seconds).
+            duration:    New timeline duration (seconds).
+            trim_start:  New in-point in source media (seconds).
+            trim_end:    New amount trimmed from end of source media (seconds).
+            track_index: New track index.
+            muted:       Mute/unmute.
+            volume:      Volume (0.0 to 1.0).
+            speed:       Playback speed.
+            reversed:    Reverse playback.
+            opacity:     Opacity (0 to 100).
+            flip_h:      Horizontal flip.
+            flip_v:      Vertical flip.
+
+        Returns:
+            Updated TimelineClip dict.
+        """
+        kwargs: dict[str, Any] = {}
+        if start_time is not None:
+            kwargs["startTime"] = start_time
+        if duration is not None:
+            kwargs["duration"] = duration
+        if trim_start is not None:
+            kwargs["trimStart"] = trim_start
+        if trim_end is not None:
+            kwargs["trimEnd"] = trim_end
+        if track_index is not None:
+            kwargs["trackIndex"] = track_index
+        if muted is not None:
+            kwargs["muted"] = muted
+        if volume is not None:
+            kwargs["volume"] = max(0.0, min(1.0, volume))
+        if speed is not None:
+            kwargs["speed"] = speed
+        if reversed is not None:
+            kwargs["reversed"] = reversed
+        if opacity is not None:
+            kwargs["opacity"] = max(0.0, min(100.0, opacity))
+        if flip_h is not None:
+            kwargs["flipH"] = flip_h
+        if flip_v is not None:
+            kwargs["flipV"] = flip_v
+        if not kwargs:
+            raise ValueError("Provide at least one property to update")
+        return store.update_clip(clip_id, **kwargs).model_dump()
+
+    @mcp.tool()
+    async def retake_clip(clip_id: str, take_index: int) -> dict[str, Any]:
+        """Switch a clip to use a different take of its asset.
+
+        The asset must have multiple takes (generated via retake/regeneration).
+        Updates the clip and all linked clips (e.g. video↔audio pairs).
+
+        Args:
+            clip_id:    The clip id to update.
+            take_index: 0-based index of the take to activate.
+
+        Returns:
+            Updated TimelineClip dict.
+        """
+        return store.retake_clip(clip_id, take_index).model_dump()

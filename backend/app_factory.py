@@ -61,6 +61,9 @@ def create_app(
         # handle incoming requests (mounted sub-apps don't get their
         # own lifespan called by Starlette).
         async with mcp_srv.session_manager.run():
+            # Register SSE listener for real-time project change notifications
+            from _routes.mcp_projects import register_sse_listener
+            register_sse_listener()
             yield
 
     app = FastAPI(title=title, lifespan=_lifespan)
@@ -87,8 +90,11 @@ def create_app(
         def _token_matches(candidate: str) -> bool:
             return hmac.compare_digest(candidate, auth_token)
 
-        # WebSocket: check query param
-        if request.headers.get("upgrade", "").lower() == "websocket":
+        # WebSocket / SSE: check query param (EventSource can't set headers)
+        if (
+            request.headers.get("upgrade", "").lower() == "websocket"
+            or request.url.path == "/api/mcp/events"
+        ):
             if _token_matches(request.query_params.get("token", "")):
                 return await call_next(request)
             return JSONResponse(status_code=401, content={"error": "Unauthorized"})

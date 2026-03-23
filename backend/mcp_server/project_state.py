@@ -18,7 +18,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Callable, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -124,13 +124,17 @@ class Track(SchemaModel):
     name: str
     muted: bool = False
     locked: bool = False
+    solo: bool = False
+    enabled: bool = True
+    sourcePatched: bool = True
     kind: str | None = None   # "video" | "audio" | None
     type: str | None = None   # "default" | "subtitle" | None
+    subtitleStyle: dict[str, Any] | None = None
 
 
 class Asset(SchemaModel):
     id: str
-    type: str   # "video" | "image" | "audio"
+    type: str   # "video" | "image" | "audio" | "adjustment"
     path: str   # absolute filesystem path
     url: str    # file:///... URL (not blob:)
     prompt: str = ""
@@ -138,22 +142,30 @@ class Asset(SchemaModel):
     duration: float | None = None
     createdAt: int
     thumbnail: str | None = None
+    favorite: bool = False
+    bin: str | None = None
+    generationParams: dict[str, Any] | None = None
+    takes: list[dict[str, Any]] | None = None
+    activeTakeIndex: int | None = None
+    colorLabel: str | None = None
 
 
 class TimelineClip(SchemaModel):
     id: str
     assetId: str | None
-    type: str   # "video" | "image" | "audio" | "text"
+    type: str   # "video" | "image" | "audio" | "adjustment" | "text"
     startTime: float    # position on timeline (seconds)
     duration: float     # duration on timeline (seconds)
     trimStart: float    # in-point in source media (seconds)
-    trimEnd: float      # out-point in source media (seconds)
+    trimEnd: float      # amount trimmed from end of source media (seconds)
     speed: float = 1.0
     reversed: bool = False
     muted: bool = False
     volume: float = 1.0
     trackIndex: int = 0
     asset: Asset | None = None   # embedded copy for the frontend
+    importedUrl: str | None = None
+    importedName: str | None = None
     flipH: bool = False
     flipV: bool = False
     transitionIn: ClipTransition = Field(default_factory=ClipTransition)
@@ -163,6 +175,11 @@ class TimelineClip(SchemaModel):
     effects: list[ClipEffect] = Field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
     textStyle: TextOverlayStyle | None = None   # only for type="text"
     motion: KenBurnsMotion | None = None
+    linkedClipIds: list[str] | None = None
+    colorLabel: str | None = None
+    letterbox: dict[str, Any] | None = None  # adjustment layer letterbox settings
+    takeIndex: int | None = None
+    isRegenerating: bool = False
 
 
 def _default_tracks() -> list[Track]:
@@ -192,6 +209,7 @@ class Project(SchemaModel):
     assets: list[Asset] = Field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
     timelines: list[Timeline] = Field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
     activeTimelineId: str | None = None
+    thumbnail: str | None = None
 
 
 # ── ProjectStore ──────────────────────────────────────────────────────────────
@@ -209,6 +227,23 @@ class ProjectStore:
         self._state_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._active: Project | None = None
+        self._listeners: list[Callable[[str, int], None]] = []
+
+    # ── Listener management ──────────────────────────────────────────────────
+
+    def add_listener(self, callback: Callable[[str, int], None]) -> None:
+        """Register a callback invoked after every project mutation.
+
+        The callback receives (project_id, updated_at_ms).
+        """
+        self._listeners.append(callback)
+
+    def remove_listener(self, callback: Callable[[str, int], None]) -> None:
+        """Remove a previously registered listener."""
+        try:
+            self._listeners.remove(callback)
+        except ValueError:
+            pass
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
@@ -224,11 +259,28 @@ class ProjectStore:
             encoding="utf-8",
         )
 
-    def _touch(self) -> None:
-        """Update updatedAt and persist. Caller must hold _lock."""
+    def _touch(self) -> tuple[str, int] | None:
+        """Update updatedAt and persist. Caller must hold _lock.
+
+        Returns (project_id, updated_at) for notification, or None.
+        """
         if self._active:
             self._active.updatedAt = _now_ms()
+            self._persist()
+            return (self._active.id, self._active.updatedAt)
         self._persist()
+        return None
+
+    def _notify(self, info: tuple[str, int] | None) -> None:
+        """Notify all listeners. Must be called OUTSIDE _lock to avoid deadlocks."""
+        if info is None:
+            return
+        project_id, updated_at = info
+        for cb in self._listeners:
+            try:
+                cb(project_id, updated_at)
+            except Exception:
+                pass
 
     def _find_clip(self, clip_id: str) -> TimelineClip:
         for clip in self._active_timeline().clips:
@@ -260,7 +312,19 @@ class ProjectStore:
                 activeTimelineId=timeline.id,
             )
             self._persist()
-            return self._active
+            result = self._active
+        self._notify((result.id, result.updatedAt))
+        return result
+
+    def peek_project(self, project_id: str) -> Project | None:
+        """Read a project from disk without changing the active project."""
+        path = self._project_file(project_id)
+        if not path.exists():
+            return None
+        try:
+            return Project.model_validate_json(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
 
     def open_project(self, project_id: str) -> Project:
         with self._lock:
@@ -270,16 +334,31 @@ class ProjectStore:
             self._active = Project.model_validate_json(path.read_text(encoding="utf-8"))
             return self._active
 
-    def upsert_project(self, project: Project) -> Project:
+    def upsert_project(self, project: Project, *, notify: bool = True) -> Project:
         """Replace the stored project JSON with the provided state.
 
         Used for keeping the MCP store in sync with frontend edits.
+        Set notify=False to skip SSE notifications (e.g. for frontend→backend sync
+        where the frontend already has the latest state).
         """
         with self._lock:
             project.updatedAt = _now_ms()
             self._active = project
             self._persist()
-            return self._active
+            result = self._active
+        if notify:
+            self._notify((result.id, result.updatedAt))
+        return result
+
+    def delete_project(self, project_id: str) -> None:
+        """Delete a project from disk and clear active state if it was active."""
+        with self._lock:
+            path = self._project_file(project_id)
+            if not path.exists():
+                raise FileNotFoundError(f"MCP project not found: {project_id}")
+            path.unlink()
+            if self._active and self._active.id == project_id:
+                self._active = None
 
     def get_active(self) -> Project:
         with self._lock:
@@ -291,8 +370,10 @@ class ProjectStore:
 
     def save(self) -> Project:
         with self._lock:
-            self._touch()
-            return self.get_active()
+            info = self._touch()
+            result = self.get_active()
+        self._notify(info)
+        return result
 
     def list_projects(self) -> list[dict[str, Any]]:
         summaries: list[dict[str, Any]] = []
@@ -340,8 +421,9 @@ class ProjectStore:
                 createdAt=_now_ms(),
             )
             self.get_active().assets.append(asset)
-            self._touch()
-            return asset
+            info = self._touch()
+        self._notify(info)
+        return asset
 
     def get_asset(self, asset_id: str) -> Asset:
         with self._lock:
@@ -362,6 +444,9 @@ class ProjectStore:
     ) -> TimelineClip:
         with self._lock:
             asset = self.get_asset(asset_id)
+            # trim_end is the out-point in source media, but the frontend
+            # trimEnd field means "amount trimmed from the end of the media"
+            media_duration = asset.duration or trim_end
             clip = TimelineClip(
                 id=_new_id("clip"),
                 assetId=asset_id,
@@ -369,13 +454,14 @@ class ProjectStore:
                 startTime=start_time,
                 duration=trim_end - trim_start,
                 trimStart=trim_start,
-                trimEnd=trim_end,
+                trimEnd=max(0.0, media_duration - trim_end),
                 trackIndex=track_index,
                 asset=asset,
             )
             self._active_timeline().clips.append(clip)
-            self._touch()
-            return clip
+            info = self._touch()
+        self._notify(info)
+        return clip
 
     def remove_clip(self, clip_id: str) -> None:
         with self._lock:
@@ -384,24 +470,31 @@ class ProjectStore:
             tl.clips = [c for c in tl.clips if c.id != clip_id]
             if len(tl.clips) == before:
                 raise KeyError(f"Clip not found: {clip_id}")
-            self._touch()
+            info = self._touch()
+        self._notify(info)
 
     def move_clip(self, clip_id: str, track_index: int, start_time: float) -> TimelineClip:
         with self._lock:
             clip = self._find_clip(clip_id)
             clip.trackIndex = track_index
             clip.startTime = start_time
-            self._touch()
-            return clip
+            info = self._touch()
+        self._notify(info)
+        return clip
 
     def trim_clip(self, clip_id: str, trim_start: float, trim_end: float) -> TimelineClip:
         with self._lock:
             clip = self._find_clip(clip_id)
+            # trim_end is the out-point in source media, but the frontend
+            # trimEnd field means "amount trimmed from the end of the media"
+            asset = self.get_asset(clip.assetId)
+            media_duration = asset.duration or trim_end
             clip.trimStart = trim_start
-            clip.trimEnd = trim_end
+            clip.trimEnd = max(0.0, media_duration - trim_end)
             clip.duration = trim_end - trim_start
-            self._touch()
-            return clip
+            info = self._touch()
+        self._notify(info)
+        return clip
 
     def split_clip(self, clip_id: str, split_at_seconds: float) -> tuple[TimelineClip, TimelineClip]:
         with self._lock:
@@ -409,8 +502,13 @@ class ProjectStore:
             for i, clip in enumerate(tl.clips):
                 if clip.id != clip_id:
                     continue
+                # trimEnd is "amount trimmed from end", so the media
+                # out-point is (mediaDuration - trimEnd)
+                asset = self.get_asset(clip.assetId)
+                media_duration = asset.duration or (clip.trimStart + clip.duration)
+                out_point = media_duration - clip.trimEnd
                 asset_split = clip.trimStart + (split_at_seconds - clip.startTime)
-                if not (clip.trimStart < asset_split < clip.trimEnd):
+                if not (clip.trimStart < asset_split < out_point):
                     raise ValueError(
                         f"split_at_seconds {split_at_seconds} is outside clip bounds "
                         f"[{clip.startTime:.2f}, {clip.startTime + clip.duration:.2f}]"
@@ -418,7 +516,7 @@ class ProjectStore:
                 left = TimelineClip(
                     id=_new_id("clip"), assetId=clip.assetId, type=clip.type,
                     startTime=clip.startTime, duration=asset_split - clip.trimStart,
-                    trimStart=clip.trimStart, trimEnd=asset_split,
+                    trimStart=clip.trimStart, trimEnd=media_duration - asset_split,
                     trackIndex=clip.trackIndex, asset=clip.asset,
                     speed=clip.speed, reversed=clip.reversed, muted=clip.muted, volume=clip.volume,
                     flipH=clip.flipH, flipV=clip.flipV, opacity=clip.opacity,
@@ -430,7 +528,7 @@ class ProjectStore:
                 right = TimelineClip(
                     id=_new_id("clip"), assetId=clip.assetId, type=clip.type,
                     startTime=clip.startTime + left.duration,
-                    duration=clip.trimEnd - asset_split,
+                    duration=out_point - asset_split,
                     trimStart=asset_split, trimEnd=clip.trimEnd,
                     trackIndex=clip.trackIndex, asset=clip.asset,
                     speed=clip.speed, reversed=clip.reversed, muted=clip.muted, volume=clip.volume,
@@ -441,7 +539,8 @@ class ProjectStore:
                     effects=list(clip.effects),
                 )
                 tl.clips[i : i + 1] = [left, right]
-                self._touch()
+                info = self._touch()
+                self._notify(info)
                 return left, right
             raise KeyError(f"Clip not found: {clip_id}")
 
@@ -459,68 +558,67 @@ class ProjectStore:
             clip = self._find_clip(clip_id)
             old_speed = clip.speed
             new_speed = max(0.1, min(10.0, speed))
-            # Recalculate playback duration to preserve the same source content,
-            # matching the frontend formula: newDuration = duration * (oldSpeed / newSpeed)
             clip.duration = clip.duration * (old_speed / new_speed)
             clip.speed = new_speed
-            self._touch()
-            return clip
+            info = self._touch()
+        self._notify(info)
+        return clip
 
     def set_clip_volume(self, clip_id: str, volume: float) -> TimelineClip:
         with self._lock:
             clip = self._find_clip(clip_id)
             clip.volume = max(0.0, min(1.0, volume))
-            self._touch()
-            return clip
+            info = self._touch()
+        self._notify(info)
+        return clip
 
     def set_clip_muted(self, clip_id: str, muted: bool) -> TimelineClip:
         with self._lock:
             clip = self._find_clip(clip_id)
             clip.muted = muted
-            self._touch()
-            return clip
+            info = self._touch()
+        self._notify(info)
+        return clip
 
     def reverse_clip(self, clip_id: str, reversed_: bool) -> TimelineClip:
         with self._lock:
             clip = self._find_clip(clip_id)
             clip.reversed = reversed_
-            self._touch()
-            return clip
+            info = self._touch()
+        self._notify(info)
+        return clip
 
     def set_clip_opacity(self, clip_id: str, opacity: float) -> TimelineClip:
         with self._lock:
             clip = self._find_clip(clip_id)
             clip.opacity = max(0.0, min(100.0, opacity))
-            self._touch()
-            return clip
+            info = self._touch()
+        self._notify(info)
+        return clip
 
     def flip_clip(self, clip_id: str, flip_h: bool, flip_v: bool) -> TimelineClip:
         with self._lock:
             clip = self._find_clip(clip_id)
             clip.flipH = flip_h
             clip.flipV = flip_v
-            self._touch()
-            return clip
+            info = self._touch()
+        self._notify(info)
+        return clip
 
     def set_clip_motion(self, clip_id: str, motion: KenBurnsMotion | None) -> TimelineClip:
         with self._lock:
             clip = self._find_clip(clip_id)
-            if motion is None:
-                clip.motion = None
-                self._touch()
-                return clip
-
-            # Clamp to safe ranges (export requires scale >= 1 so crop doesn't error).
-            motion.start.scale = max(1.0, float(motion.start.scale))
-            motion.end.scale = max(1.0, float(motion.end.scale))
-            motion.start.focusX = max(0.0, min(100.0, float(motion.start.focusX)))
-            motion.end.focusX = max(0.0, min(100.0, float(motion.end.focusX)))
-            motion.start.focusY = max(0.0, min(100.0, float(motion.start.focusY)))
-            motion.end.focusY = max(0.0, min(100.0, float(motion.end.focusY)))
-
+            if motion is not None:
+                motion.start.scale = max(1.0, float(motion.start.scale))
+                motion.end.scale = max(1.0, float(motion.end.scale))
+                motion.start.focusX = max(0.0, min(100.0, float(motion.start.focusX)))
+                motion.end.focusX = max(0.0, min(100.0, float(motion.end.focusX)))
+                motion.start.focusY = max(0.0, min(100.0, float(motion.start.focusY)))
+                motion.end.focusY = max(0.0, min(100.0, float(motion.end.focusY)))
             clip.motion = motion
-            self._touch()
-            return clip
+            info = self._touch()
+        self._notify(info)
+        return clip
 
     def set_clip_color_correction(self, clip_id: str, **kwargs: float) -> TimelineClip:
         with self._lock:
@@ -530,8 +628,9 @@ class ProjectStore:
                           "tint", "exposure", "highlights", "shadows"):
                 if field in kwargs:
                     setattr(cc, field, max(-100.0, min(100.0, kwargs[field])))
-            self._touch()
-            return clip
+            info = self._touch()
+        self._notify(info)
+        return clip
 
     def set_clip_transition(
         self, clip_id: str, side: str, transition_type: str, duration: float
@@ -545,8 +644,9 @@ class ProjectStore:
                 clip.transitionOut = t
             else:
                 raise ValueError(f"side must be 'in' or 'out', got '{side}'")
-            self._touch()
-            return clip
+            info = self._touch()
+        self._notify(info)
+        return clip
 
     def add_clip_effect(
         self, clip_id: str, effect_type: str, params: dict[str, float] | None = None
@@ -559,8 +659,9 @@ class ProjectStore:
                 params=params or _default_effect_params(effect_type),
             )
             clip.effects.append(effect)
-            self._touch()
-            return clip, effect
+            info = self._touch()
+        self._notify(info)
+        return clip, effect
 
     def remove_clip_effect(self, clip_id: str, effect_id: str) -> TimelineClip:
         with self._lock:
@@ -569,8 +670,9 @@ class ProjectStore:
             clip.effects = [e for e in clip.effects if e.id != effect_id]
             if len(clip.effects) == before:
                 raise KeyError(f"Effect not found: {effect_id}")
-            self._touch()
-            return clip
+            info = self._touch()
+        self._notify(info)
+        return clip
 
     def update_clip_effect(
         self, clip_id: str, effect_id: str, params: dict[str, float]
@@ -580,7 +682,8 @@ class ProjectStore:
             for effect in clip.effects:
                 if effect.id == effect_id:
                     effect.params.update(params)
-                    self._touch()
+                    info = self._touch()
+                    self._notify(info)
                     return clip, effect
             raise KeyError(f"Effect not found: {effect_id}")
 
@@ -604,8 +707,9 @@ class ProjectStore:
                 style=SubtitleStyle.model_validate(style) if style else None,
             )
             self._active_timeline().subtitles.append(sub)
-            self._touch()
-            return sub
+            info = self._touch()
+        self._notify(info)
+        return sub
 
     def update_subtitle(
         self,
@@ -623,7 +727,8 @@ class ProjectStore:
                         sub.startTime = start_time
                     if end_time is not None:
                         sub.endTime = end_time
-                    self._touch()
+                    info = self._touch()
+                    self._notify(info)
                     return sub
             raise KeyError(f"Subtitle not found: {subtitle_id}")
 
@@ -634,7 +739,8 @@ class ProjectStore:
             tl.subtitles = [s for s in tl.subtitles if s.id != subtitle_id]
             if len(tl.subtitles) == before:
                 raise KeyError(f"Subtitle not found: {subtitle_id}")
-            self._touch()
+            info = self._touch()
+        self._notify(info)
 
     def set_subtitle_style(self, subtitle_id: str, **style_kwargs: object) -> SubtitleClip:
         with self._lock:
@@ -645,13 +751,110 @@ class ProjectStore:
                     for k, v in style_kwargs.items():
                         if hasattr(sub.style, k):
                             setattr(sub.style, k, v)
-                    self._touch()
+                    info = self._touch()
+                    self._notify(info)
                     return sub
             raise KeyError(f"Subtitle not found: {subtitle_id}")
 
     def get_subtitles(self) -> list[SubtitleClip]:
         with self._lock:
             return list(self._active_timeline().subtitles)
+
+    # ── Track management ─────────────────────────────────────────────────────
+
+    def add_track(
+        self,
+        name: str,
+        kind: str,
+        position: int | None = None,
+        track_type: str | None = None,
+    ) -> Track:
+        with self._lock:
+            tl = self._active_timeline()
+            track = Track(
+                id=_new_id("track"),
+                name=name,
+                kind=kind,
+                type=track_type,
+            )
+            if position is not None and 0 <= position <= len(tl.tracks):
+                tl.tracks.insert(position, track)
+                # Shift trackIndex for clips and subtitles at or after the insertion point
+                for c in tl.clips:
+                    if c.trackIndex >= position:
+                        c.trackIndex += 1
+                for s in tl.subtitles:
+                    if s.trackIndex >= position:
+                        s.trackIndex += 1
+            else:
+                tl.tracks.append(track)
+            info = self._touch()
+        self._notify(info)
+        return track
+
+    def remove_track(self, track_id: str) -> None:
+        with self._lock:
+            tl = self._active_timeline()
+            if len(tl.tracks) <= 1:
+                raise ValueError("Cannot remove the last track")
+            idx = next((i for i, t in enumerate(tl.tracks) if t.id == track_id), None)
+            if idx is None:
+                raise KeyError(f"Track not found: {track_id}")
+            tl.tracks.pop(idx)
+            # Remove clips and subtitles on the deleted track, shift others down
+            tl.clips = [c for c in tl.clips if c.trackIndex != idx]
+            for c in tl.clips:
+                if c.trackIndex > idx:
+                    c.trackIndex -= 1
+            tl.subtitles = [s for s in tl.subtitles if s.trackIndex != idx]
+            for s in tl.subtitles:
+                if s.trackIndex > idx:
+                    s.trackIndex -= 1
+            info = self._touch()
+        self._notify(info)
+
+    def reorder_track(self, track_id: str, new_position: int) -> list[Track]:
+        with self._lock:
+            tl = self._active_timeline()
+            old_idx = next((i for i, t in enumerate(tl.tracks) if t.id == track_id), None)
+            if old_idx is None:
+                raise KeyError(f"Track not found: {track_id}")
+            new_pos = max(0, min(new_position, len(tl.tracks) - 1))
+            if old_idx == new_pos:
+                return list(tl.tracks)
+            track = tl.tracks.pop(old_idx)
+            tl.tracks.insert(new_pos, track)
+            # The track that was at old_idx moved to new_pos; all between shifted by ±1
+            for c in tl.clips:
+                if c.trackIndex == old_idx:
+                    c.trackIndex = new_pos
+                elif old_idx < new_pos and old_idx < c.trackIndex <= new_pos:
+                    c.trackIndex -= 1
+                elif old_idx > new_pos and new_pos <= c.trackIndex < old_idx:
+                    c.trackIndex += 1
+            for s in tl.subtitles:
+                if s.trackIndex == old_idx:
+                    s.trackIndex = new_pos
+                elif old_idx < new_pos and old_idx < s.trackIndex <= new_pos:
+                    s.trackIndex -= 1
+                elif old_idx > new_pos and new_pos <= s.trackIndex < old_idx:
+                    s.trackIndex += 1
+            info = self._touch()
+        self._notify(info)
+        return list(tl.tracks)
+
+    def set_track_properties(self, track_id: str, **kwargs: Any) -> Track:
+        with self._lock:
+            tl = self._active_timeline()
+            for track in tl.tracks:
+                if track.id == track_id:
+                    for k, v in kwargs.items():
+                        if hasattr(track, k) and k != "id":
+                            setattr(track, k, v)
+                    info = self._touch()
+                    self._notify(info)
+                    return track
+            raise KeyError(f"Track not found: {track_id}")
 
     # ── Text overlay clip ─────────────────────────────────────────────────────
 
@@ -677,8 +880,9 @@ class ProjectStore:
                 textStyle=text_style,
             )
             self._active_timeline().clips.append(clip)
-            self._touch()
-            return clip
+            info = self._touch()
+        self._notify(info)
+        return clip
 
     def update_text_clip_style(self, clip_id: str, **style_kwargs: object) -> TimelineClip:
         with self._lock:
@@ -690,8 +894,72 @@ class ProjectStore:
             for k, v in style_kwargs.items():
                 if hasattr(clip.textStyle, k):
                     setattr(clip.textStyle, k, v)
-            self._touch()
-            return clip
+            info = self._touch()
+        self._notify(info)
+        return clip
+
+    # ── Generic clip update ──────────────────────────────────────────────────
+
+    def update_clip(self, clip_id: str, **kwargs: Any) -> TimelineClip:
+        """Generic clip updater — set any field(s) on a clip.
+
+        Delegates to dedicated setters where validation is needed (speed, volume,
+        opacity, color correction, transitions). For other fields, sets directly.
+        """
+        with self._lock:
+            clip = self._find_clip(clip_id)
+            for k, v in kwargs.items():
+                if k == "id":
+                    continue
+                if hasattr(clip, k):
+                    setattr(clip, k, v)
+            info = self._touch()
+        self._notify(info)
+        return clip
+
+    def retake_clip(self, clip_id: str, take_index: int) -> TimelineClip:
+        """Switch a clip to use a different take of its asset.
+
+        Updates the clip's takeIndex and its embedded asset url/path/thumbnail
+        to match the selected take. Also updates any linked clips.
+        """
+        with self._lock:
+            clip = self._find_clip(clip_id)
+            if not clip.assetId:
+                raise ValueError(f"Clip {clip_id} has no asset")
+            asset = self.get_asset(clip.assetId)
+            if not asset.takes or take_index >= len(asset.takes):
+                raise ValueError(f"Take index {take_index} out of range")
+            take = asset.takes[take_index]
+            take_url = take.get("url", asset.url)
+            take_path = take.get("path", asset.path)
+            take_thumbnail = take.get("thumbnail")
+
+            # Update the asset
+            asset.activeTakeIndex = take_index
+            asset.url = take_url
+            asset.path = take_path
+            if take_thumbnail:
+                asset.thumbnail = take_thumbnail
+
+            # Update the clip and any linked clips
+            clip_ids = [clip_id] + (clip.linkedClipIds or [])
+            for cid in clip_ids:
+                try:
+                    c = self._find_clip(cid)
+                    c.takeIndex = take_index
+                    if c.asset:
+                        c.asset.url = take_url
+                        c.asset.path = take_path
+                        c.asset.activeTakeIndex = take_index
+                        if take_thumbnail:
+                            c.asset.thumbnail = take_thumbnail
+                except KeyError:
+                    pass
+
+            info = self._touch()
+        self._notify(info)
+        return clip
 
 
 # ── Effect default params ─────────────────────────────────────────────────────

@@ -1,6 +1,9 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import type { SubtitleClip, Track, TimelineClip } from '../../types/project'
 import { parseSrt, exportSrt } from '../../lib/srt'
+
+/** Default max words per chunk for progressive subtitle splitting */
+const DEFAULT_WORDS_PER_CHUNK = 4
 
 export interface UseSubtitleOperationsParams {
   subtitles: SubtitleClip[]
@@ -96,6 +99,104 @@ export function useSubtitleOperations({
     if (subtitleFileInputRef.current) subtitleFileInputRef.current.value = ''
   }
 
+  /**
+   * Split a single subtitle into progressive chunks (e.g. 4 words each).
+   * Each chunk gets a proportional time slice of the original subtitle's duration,
+   * so text appears progressively as the voiceover plays — like TikTok/Reels captions.
+   */
+  const splitSubtitleProgressive = useCallback((subId: string, wordsPerChunk = DEFAULT_WORDS_PER_CHUNK) => {
+    setSubtitles(prev => {
+      const idx = prev.findIndex(s => s.id === subId)
+      if (idx === -1) return prev
+
+      const sub = prev[idx]
+      const words = sub.text.trim().split(/\s+/).filter(Boolean)
+      if (words.length <= wordsPerChunk) return prev // Already short enough
+
+      // Build chunks of N words
+      const chunks: string[] = []
+      for (let i = 0; i < words.length; i += wordsPerChunk) {
+        chunks.push(words.slice(i, i + wordsPerChunk).join(' '))
+      }
+
+      const totalDuration = sub.endTime - sub.startTime
+      // Distribute time proportionally by character count (longer chunks get more time)
+      const totalChars = chunks.reduce((sum, c) => sum + c.length, 0)
+
+      const newSubs: SubtitleClip[] = []
+      let cursor = sub.startTime
+
+      for (let i = 0; i < chunks.length; i++) {
+        const chunkDuration = totalDuration * (chunks[i].length / totalChars)
+        const endTime = i === chunks.length - 1 ? sub.endTime : cursor + chunkDuration
+        newSubs.push({
+          id: `sub-${Date.now()}-${Math.random().toString(36).substr(2, 9)}-${i}`,
+          text: chunks[i],
+          startTime: parseFloat(cursor.toFixed(3)),
+          endTime: parseFloat(endTime.toFixed(3)),
+          trackIndex: sub.trackIndex,
+          style: sub.style,
+        })
+        cursor = endTime
+      }
+
+      // Replace original with chunks
+      const result = [...prev]
+      result.splice(idx, 1, ...newSubs)
+
+      // Select the first new chunk
+      setSelectedSubtitleId(newSubs[0].id)
+      return result
+    })
+  }, [setSubtitles, setSelectedSubtitleId])
+
+  /**
+   * Split ALL subtitles on a track into progressive chunks.
+   */
+  const splitAllSubtitlesProgressive = useCallback((trackIndex: number, wordsPerChunk = DEFAULT_WORDS_PER_CHUNK) => {
+    setSubtitles(prev => {
+      const result: SubtitleClip[] = []
+
+      for (const sub of prev) {
+        if (sub.trackIndex !== trackIndex) {
+          result.push(sub)
+          continue
+        }
+
+        const words = sub.text.trim().split(/\s+/).filter(Boolean)
+        if (words.length <= wordsPerChunk) {
+          result.push(sub)
+          continue
+        }
+
+        const chunks: string[] = []
+        for (let i = 0; i < words.length; i += wordsPerChunk) {
+          chunks.push(words.slice(i, i + wordsPerChunk).join(' '))
+        }
+
+        const totalDuration = sub.endTime - sub.startTime
+        const totalChars = chunks.reduce((sum, c) => sum + c.length, 0)
+        let cursor = sub.startTime
+
+        for (let i = 0; i < chunks.length; i++) {
+          const chunkDuration = totalDuration * (chunks[i].length / totalChars)
+          const endTime = i === chunks.length - 1 ? sub.endTime : cursor + chunkDuration
+          result.push({
+            id: `sub-${Date.now()}-${Math.random().toString(36).substr(2, 9)}-${i}`,
+            text: chunks[i],
+            startTime: parseFloat(cursor.toFixed(3)),
+            endTime: parseFloat(endTime.toFixed(3)),
+            trackIndex: sub.trackIndex,
+            style: sub.style,
+          })
+          cursor = endTime
+        }
+      }
+
+      return result
+    })
+  }, [setSubtitles])
+
   const handleExportSrt = () => {
     const cues = subtitles
       .filter(s => s.text.trim())
@@ -141,6 +242,8 @@ export function useSubtitleOperations({
     addSubtitleClip,
     updateSubtitle,
     deleteSubtitle,
+    splitSubtitleProgressive,
+    splitAllSubtitlesProgressive,
     handleImportSrt,
     handleExportSrt,
   }

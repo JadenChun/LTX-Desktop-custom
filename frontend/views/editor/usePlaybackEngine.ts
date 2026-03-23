@@ -40,6 +40,7 @@ export interface UsePlaybackEngineParams {
   inPoint: number | null
   outPoint: number | null
   totalDuration: number
+  contentDuration: number
   zoom: number
   setPlaybackActiveClipId: React.Dispatch<React.SetStateAction<string | null>>
 }
@@ -56,7 +57,7 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams) {
     centerOnPlayheadRef, clipsRef, tracksRef, assetsRef,
     playheadOverlayRef, playheadRulerRef, lastStateUpdateRef,
     preSeekDoneRef, rafActiveClipIdRef, setPlaybackActiveClipId,
-    inPoint, outPoint, totalDuration, zoom,
+    inPoint, outPoint, totalDuration, contentDuration, zoom,
   } = params
 
   const audioElementsRef = useRef<Map<string, HTMLAudioElement>>(new Map())
@@ -178,7 +179,7 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams) {
         if (next >= loopEnd) next = loopStart
         else if (next <= loopStart) next = loopEnd
       } else {
-        if (next >= totalDuration) { next = 0; stopped = true }
+        if (contentDuration > 0 && next >= contentDuration) { next = 0; stopped = true }
         else if (next < 0) { next = 0; stopped = true }
       }
       
@@ -207,7 +208,7 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams) {
       if (dissolveInfo) {
         // During dissolve: the pool continues showing the OUTGOING clip (with fading opacity via React).
         // We keep the pool visible and let it play normally for the outgoing clip.
-        if (poolContainer) poolContainer.classList.remove('hidden')
+        if (poolContainer) poolContainer.style.visibility = 'visible'
         
         // Ensure pool video for outgoing clip is playing and in sync
         const outClip = dissolveInfo.outgoing
@@ -232,9 +233,10 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams) {
               const vd = outVid.duration
               if (!isNaN(vd)) {
                 const usable = vd - outClip.trimStart - outClip.trimEnd
+                const outMediaEnd = vd - outClip.trimEnd
                 const tt = outClip.reversed
-                  ? Math.max(0, Math.min(vd, outClip.trimStart + usable - timeInClip * outClip.speed))
-                  : Math.max(0, Math.min(vd, outClip.trimStart + timeInClip * outClip.speed))
+                  ? Math.max(outClip.trimStart, Math.min(outMediaEnd, outClip.trimStart + usable - timeInClip * outClip.speed))
+                  : Math.max(outClip.trimStart, Math.min(outMediaEnd, outClip.trimStart + timeInClip * outClip.speed))
                 if (outClip.reversed) {
                   if (!outVid.paused) outVid.pause()
                   if (!isNaN(tt) && Math.abs(outVid.currentTime - tt) > 0.04) outVid.currentTime = tt
@@ -256,10 +258,11 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams) {
             const clip = dissolveInfo.incoming
             const videoDuration = inVid.duration
             const usableMedia = videoDuration - clip.trimStart - clip.trimEnd
+            const inMediaEnd = videoDuration - clip.trimEnd
             const timeInClip = Math.max(0, next - clip.startTime)
             const targetTime = clip.reversed
-              ? Math.max(0, Math.min(videoDuration, clip.trimStart + usableMedia - timeInClip * clip.speed))
-              : Math.max(0, Math.min(videoDuration, clip.trimStart + timeInClip * clip.speed))
+              ? Math.max(clip.trimStart, Math.min(inMediaEnd, clip.trimStart + usableMedia - timeInClip * clip.speed))
+              : Math.max(clip.trimStart, Math.min(inMediaEnd, clip.trimStart + timeInClip * clip.speed))
             if (!inVid.paused) inVid.pause()
             if (!isNaN(targetTime) && Math.abs(inVid.currentTime - targetTime) > 0.04) {
               inVid.currentTime = targetTime
@@ -285,7 +288,7 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams) {
         }
         
       } else if (syncClip && syncClip.asset?.type === 'video') {
-        if (poolContainer) poolContainer.classList.remove('hidden')
+        if (poolContainer) poolContainer.style.visibility = 'visible'
         const clipSrc = resolveClipSrcRef(syncClip)
         if (clipSrc) {
           let video = pool.get(clipSrc)
@@ -321,10 +324,12 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams) {
               const videoDuration = v.duration
               if (!isNaN(videoDuration)) {
                 const usableMedia = videoDuration - syncClip.trimStart - syncClip.trimEnd
+                const mediaEnd = videoDuration - syncClip.trimEnd
+                const mediaStart = syncClip.trimStart
                 const targetTime = syncClip.reversed
-                  ? Math.max(0, Math.min(videoDuration, syncClip.trimStart + usableMedia - timeInClip * syncClip.speed))
-                  : Math.max(0, Math.min(videoDuration, syncClip.trimStart + timeInClip * syncClip.speed))
-                
+                  ? Math.max(mediaStart, Math.min(mediaEnd, syncClip.trimStart + usableMedia - timeInClip * syncClip.speed))
+                  : Math.max(mediaStart, Math.min(mediaEnd, syncClip.trimStart + timeInClip * syncClip.speed))
+
                 if (syncClip.reversed) {
                   if (!v.paused) v.pause()
                   v.playbackRate = 1
@@ -338,7 +343,7 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams) {
                     if (typeof (v as any).fastSeek === 'function') (v as any).fastSeek(targetTime)
                     else v.currentTime = targetTime
                   }
-                  if (v.paused) v.play().catch(() => {})
+                  if (v.paused && !v.ended) v.play().catch(() => {})
                 }
                 
                 // Always mute video elements — audio comes exclusively from audio tracks
@@ -389,12 +394,12 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams) {
       } else if (syncClip && syncClip.asset?.type === 'image') {
         // Switching to an image clip: keep the video pool visible (paused) until React renders the <img>.
         // Otherwise we can flash black because currentTime state is throttled while the rAF advances.
-        if (poolContainer) poolContainer.classList.remove('hidden')
+        if (poolContainer) poolContainer.style.visibility = 'visible'
         const curVid = pool.get(activePoolSrcRef.current)
         if (curVid && !curVid.paused) curVid.pause()
       } else {
         // No video clip at this time — pause current pool video (keep last frame), hide pool
-        if (poolContainer) poolContainer.classList.add('hidden')
+        if (poolContainer) poolContainer.style.visibility = 'hidden'
         const curVid = pool.get(activePoolSrcRef.current)
         if (curVid && !curVid.paused) curVid.pause()
       }
@@ -418,10 +423,10 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams) {
           if (c.type === 'adjustment' || c.type === 'text' || c.type === 'image') continue
           if (next < c.startTime || next >= c.startTime + c.duration) continue
           if (trks[c.trackIndex]?.enabled === false) continue
-          // For video clips: only play audio if there's a linked audio clip on the timeline.
-          // If the video was added without a linked audio clip (e.g. audio tracks were unpatched),
-          // its embedded audio should not play.
-          if (c.type === 'video' && (!c.linkedClipIds || !c.linkedClipIds.some(lid => allClips.some(ac => ac.id === lid && ac.type === 'audio')))) continue
+          // For video clips: skip audio if there's a linked audio clip on the timeline
+          // (the audio clip handles playback). Only play embedded audio from video clips
+          // that don't have a separate audio clip.
+          if (c.type === 'video' && c.linkedClipIds && c.linkedClipIds.some(lid => allClips.some(ac => ac.id === lid && ac.type === 'audio'))) continue
           activeAudioIds.add(c.id)
         }
         
@@ -570,6 +575,9 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams) {
       // Final sync: push authoritative time to React state
       setCurrentTime(playbackTimeRef.current)
       setPlaybackActiveClipId(null) // reset so React falls back to activeClip
+      // Reset pool container visibility so React's className takes over again
+      const poolContainer = document.getElementById('video-pool-container')
+      if (poolContainer) poolContainer.style.visibility = ''
       rafActiveClipIdRef.current = null
       // Pause all hidden audio elements and reset sync flags
       for (const [, el] of audioElementsRef.current) {
@@ -577,7 +585,7 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams) {
         ;(el as any).__audioPlaying = false
       }
     }
-  }, [isPlaying, totalDuration, shuttleSpeed, playingInOut, inPoint, outPoint, zoom])
+  }, [isPlaying, totalDuration, contentDuration, shuttleSpeed, playingInOut, inPoint, outPoint, zoom])
   
   // Clear In/Out loop mode when playback stops
   useEffect(() => {
@@ -721,9 +729,10 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams) {
             if (!video || !video.duration || isNaN(video.duration)) return
             const videoDuration = video.duration
             const usableMedia = videoDuration - incoming.trimStart - incoming.trimEnd
+            const incMediaEnd = videoDuration - incoming.trimEnd
             const targetTime = incoming.reversed
-              ? Math.max(0, Math.min(videoDuration, incoming.trimStart + usableMedia - timeInClip * incoming.speed))
-              : Math.max(0, Math.min(videoDuration, incoming.trimStart + timeInClip * incoming.speed))
+              ? Math.max(incoming.trimStart, Math.min(incMediaEnd, incoming.trimStart + usableMedia - timeInClip * incoming.speed))
+              : Math.max(incoming.trimStart, Math.min(incMediaEnd, incoming.trimStart + timeInClip * incoming.speed))
             
             if (!video.paused) video.pause()
             video.muted = true
@@ -813,10 +822,12 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams) {
       
       const videoDuration = video.duration
       const usableMediaDuration = videoDuration - syncClip.trimStart - syncClip.trimEnd
-      
-      const targetTime = syncClip.reversed 
-        ? Math.max(0, Math.min(videoDuration, syncClip.trimStart + usableMediaDuration - timeInClip * syncClip.speed))
-        : Math.max(0, Math.min(videoDuration, syncClip.trimStart + timeInClip * syncClip.speed))
+      const mediaEnd = videoDuration - syncClip.trimEnd
+      const mediaStart = syncClip.trimStart
+
+      const targetTime = syncClip.reversed
+        ? Math.max(mediaStart, Math.min(mediaEnd, syncClip.trimStart + usableMediaDuration - timeInClip * syncClip.speed))
+        : Math.max(mediaStart, Math.min(mediaEnd, syncClip.trimStart + timeInClip * syncClip.speed))
       
       if (syncClip.reversed) {
         if (!video.paused) video.pause()
@@ -897,13 +908,13 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams) {
       return clip.asset?.url || clip.importedUrl || null
     }
     
-    // Pre-create audio elements for audio clips and video clips that have linked audio.
-    // Video clips without a linked audio clip (e.g. added with audio tracks unpatched)
-    // should not produce any audio output.
+    // Pre-create audio elements for audio clips and video clips without linked audio.
+    // Video clips WITH a linked audio clip are skipped (the audio clip handles playback).
+    // Video clips WITHOUT a linked audio clip play their embedded audio directly.
     const allAudioClips = clips.filter(c => {
       if (c.type === 'adjustment' || c.type === 'text' || c.type === 'image') return false
       if (!getAudioClipUrl(c)) return false
-      if (c.type === 'video' && (!c.linkedClipIds || !c.linkedClipIds.some(lid => clips.some(ac => ac.id === lid && ac.type === 'audio')))) return false
+      if (c.type === 'video' && c.linkedClipIds && c.linkedClipIds.some(lid => clips.some(ac => ac.id === lid && ac.type === 'audio'))) return false
       return true
     })
     const allAudioClipIds = new Set(allAudioClips.map(c => c.id))

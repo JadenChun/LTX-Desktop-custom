@@ -62,3 +62,11 @@ def register_project_tools(mcp: FastMCP, store: "ProjectStore") -> None:
             Full project state dict (id, name, assets, timelines, clips).
         """
         return store.get_active().model_dump()
+
+    @mcp.tool()
+    async def list_projects() -> list[dict[str, Any]]:
+        """List all available MCP-created projects.
+
+        Returns id, name, createdAt, updatedAt, assetCount, and clipCount for each project.
+        """
+        return store.list_projects()

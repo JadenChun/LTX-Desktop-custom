@@ -23,6 +23,7 @@ from mcp_server.tools.project import register_project_tools
 from mcp_server.tools.subtitle import register_subtitle_tools
 from mcp_server.tools.text_overlay import register_text_overlay_tools
 from mcp_server.tools.timeline import register_timeline_tools
+from mcp_server.tools.tracks import register_track_tools
 
 if TYPE_CHECKING:
     from app_handler import AppHandler
@@ -60,6 +61,7 @@ def create_mcp_server(handler: "AppHandler") -> FastMCP:
     register_project_tools(mcp, _store)
     register_asset_tools(mcp, _store)
     register_timeline_tools(mcp, _store)
+    register_track_tools(mcp, _store)
     register_subtitle_tools(mcp, _store)
     register_text_overlay_tools(mcp, _store)
     register_ai_generation_tools(mcp, handler)

@@ -39,12 +39,12 @@ win:
         - x64
   icon: resources/icon.ico
   artifactName: ${productName}-Setup.${ext}
-  azureSignOptions:
-    publisherName: Lightricks US Inc
-    endpoint: https://eus.codesigning.azure.net/
-    certificateProfileName: ltx-desktop-trusted
-    codeSigningAccountName: ltx-trusted
-    excludeEnvironmentCredential: true
+  # azureSignOptions:
+  #   publisherName: Lightricks US Inc
+  #   endpoint: https://eus.codesigning.azure.net/
+  #   certificateProfileName: ltx-desktop-trusted
+  #   codeSigningAccountName: ltx-trusted
+  #   excludeEnvironmentCredential: true
 
 nsis:
   oneClick: false

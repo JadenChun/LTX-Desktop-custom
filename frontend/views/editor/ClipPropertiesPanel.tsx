@@ -659,13 +659,37 @@ export function ClipPropertiesPanel(props: ClipPropertiesPanelProps) {
         </div>
 
         <div>
-          <label className="block text-xs text-zinc-500 mb-1">Speed</label>
+          <div className="flex items-center justify-between mb-1">
+            <label className="text-xs text-zinc-500">Speed</label>
+            <div className="flex items-center gap-1">
+              <input
+                type="number"
+                min={0.25}
+                max={100}
+                step={0.25}
+                value={selectedClip.speed}
+                onChange={(e) => {
+                  const val = parseFloat(e.target.value)
+                  if (isNaN(val) || val < 0.25) return
+                  const newSpeed = val
+                  const oldSpeed = selectedClip.speed
+                  let newDuration = selectedClip.duration * (oldSpeed / newSpeed)
+                  const maxDur = getMaxClipDuration({ ...selectedClip, speed: newSpeed })
+                  newDuration = Math.min(newDuration, maxDur)
+                  newDuration = Math.max(0.5, newDuration)
+                  updateClip(selectedClip.id, { speed: newSpeed, duration: newDuration })
+                }}
+                className="w-16 bg-zinc-800 border border-zinc-700 rounded px-1.5 py-0.5 text-xs text-white text-right [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+              />
+              <span className="text-xs text-zinc-400">x</span>
+            </div>
+          </div>
           <input
             type="range"
             min={0.25}
             max={4}
             step={0.25}
-            value={selectedClip.speed}
+            value={Math.min(selectedClip.speed, 4)}
             onChange={(e) => {
               const newSpeed = parseFloat(e.target.value)
               const oldSpeed = selectedClip.speed
@@ -679,7 +703,6 @@ export function ClipPropertiesPanel(props: ClipPropertiesPanelProps) {
           />
           <div className="flex justify-between text-[10px] text-zinc-500 mt-1">
             <span>0.25x</span>
-            <span className="text-white">{selectedClip.speed}x</span>
             <span>4x</span>
           </div>
         </div>

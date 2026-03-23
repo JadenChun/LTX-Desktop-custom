@@ -41,10 +41,18 @@ export function useClipOperations(params: UseClipOperationsParams) {
     fileInputRef, setHoveredCutPoint,
   } = params
 
-  const addClipToTimeline = (asset: Asset, trackIndex: number = 0, startTime?: number) => {
+  const addClipToTimeline = async (asset: Asset, trackIndex: number = 0, startTime?: number) => {
     const track = tracks[trackIndex]
     if (!track || track.locked) return
-    
+
+    // Probe duration if not set (e.g. asset from MCP or failed probe)
+    if (!asset.duration && asset.url && (asset.type === 'video' || asset.type === 'audio')) {
+      const probed = await getMediaDuration(asset.url, asset.type === 'audio')
+      if (probed && probed !== 5) {
+        asset = { ...asset, duration: probed }
+      }
+    }
+
     // Check source patching: if the target track is unpatched, skip creating the clip on it
     const videoPatched = track.sourcePatched !== false
     const isAdjustment = asset.type === 'adjustment'
@@ -301,18 +309,19 @@ export function useClipOperations(params: UseClipOperationsParams) {
         .map(lid => newClips.find(c => c.id === lid))
         .filter((c): c is TimelineClip => !!c)
       
+      const mediaSplitPoint = splitPoint * clip.speed
       const firstHalf: TimelineClip = {
         ...clip,
         duration: splitPoint,
-        trimEnd: clip.trimEnd + (clip.duration - splitPoint),
+        trimEnd: clip.trimEnd + (clip.duration - splitPoint) * clip.speed,
       }
-      
+
       const secondHalf: TimelineClip = {
         ...clip,
         id: secondHalfId,
         startTime: clip.startTime + splitPoint,
         duration: clip.duration - splitPoint,
-        trimStart: clip.trimStart + splitPoint,
+        trimStart: clip.trimStart + mediaSplitPoint,
       }
       
       newClips = newClips.map(c => c.id === splitId ? firstHalf : c).concat(secondHalf)
@@ -335,19 +344,20 @@ export function useClipOperations(params: UseClipOperationsParams) {
         firstHalfLinkedIds.push(linkedClip.id)
         secondHalfLinkedIds.push(linkedSecondId)
         
+        const linkedMediaSplitPoint = linkedSplitPoint * linkedClip.speed
         const linkedFirstHalf: TimelineClip = {
           ...linkedClip,
           duration: linkedSplitPoint,
-          trimEnd: linkedClip.trimEnd + (linkedClip.duration - linkedSplitPoint),
+          trimEnd: linkedClip.trimEnd + (linkedClip.duration - linkedSplitPoint) * linkedClip.speed,
           linkedClipIds: [firstHalfId],
         }
-        
+
         const linkedSecondHalf: TimelineClip = {
           ...linkedClip,
           id: linkedSecondId,
           startTime: linkedClip.startTime + linkedSplitPoint,
           duration: linkedClip.duration - linkedSplitPoint,
-          trimStart: linkedClip.trimStart + linkedSplitPoint,
+          trimStart: linkedClip.trimStart + linkedMediaSplitPoint,
           linkedClipIds: [secondHalfId],
         }
         

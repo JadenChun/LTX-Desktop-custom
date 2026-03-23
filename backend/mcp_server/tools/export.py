@@ -22,7 +22,7 @@ def register_export_tools(mcp: FastMCP, store: "ProjectStore") -> None:
     """Register export tools on the MCP server."""
 
     @mcp.tool()
-    async def export_timeline(output_filename: str | None = None) -> dict[str, Any]:
+    async def export_timeline(output_filename: str | None = None, width: int = 1920, height: int = 1080) -> dict[str, Any]:
         """Export the active project timeline to an MP4 file.
 
         Concatenates all clips on track 0 (V1) in startTime order using ffmpeg.
@@ -35,6 +35,8 @@ def register_export_tools(mcp: FastMCP, store: "ProjectStore") -> None:
         Args:
             output_filename: Optional MP4 filename (no path). If omitted, uses the
                              project name with a timestamp.
+            width: Output video width (default 1920). Use 1080 for vertical 1080p.
+            height: Output video height (default 1080). Use 1920 for vertical 1080p.
 
         Returns:
             {"job_id": str, "output_path": str, "status": "pending"}
@@ -61,7 +63,7 @@ def register_export_tools(mcp: FastMCP, store: "ProjectStore") -> None:
         _export_jobs[job_id] = {"status": "pending", "output_path": output_path, "error": None}
 
         asyncio.get_event_loop().create_task(
-            _run_export(job_id, clips, output_path)
+            _run_export(job_id, clips, output_path, width, height)
         )
 
         return {"job_id": job_id, "output_path": output_path, "status": "pending"}
@@ -86,6 +88,8 @@ async def _run_export(
     job_id: str,
     clips: list[Any],
     output_path: str,
+    width: int = 1920,
+    height: int = 1080,
 ) -> None:
     """Background task: concatenate clips using ffmpeg."""
     import tempfile
@@ -108,6 +112,7 @@ async def _run_export(
                     "-ss", str(clip.trimStart),
                     "-i", clip.asset.path,
                     "-t", str(clip.trimEnd - clip.trimStart),
+                    "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:-1:-1:color=black",
                     "-c:v", "libx264", "-preset", "fast", "-crf", "18",
                     "-c:a", "aac",
                     seg_path,

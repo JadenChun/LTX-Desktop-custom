@@ -15,6 +15,7 @@ interface Window {
   electronAPI: {
     getBackend: () => Promise<{ url: string; token: string }>
     getModelsPath: () => Promise<string>
+    approvePaths: (filePaths: string[]) => Promise<void>
     readLocalFile: (filePath: string) => Promise<{ data: string; mimeType: string }>
     checkGpu: () => Promise<{ available: boolean; name?: string; vram?: number }>
     getAppInfo: () => Promise<{ version: string; isPackaged: boolean; modelsPath: string; userDataPath: string }>
@@ -49,6 +50,8 @@ interface Window {
       subtitles?: { text: string; startTime: number; endTime: number; style: { fontSize: number; fontFamily: string; fontWeight: string; color: string; backgroundColor: string; position: string; italic: boolean } }[]
     }) => Promise<{ success?: boolean; error?: string }>
     exportCancel: (sessionId: string) => Promise<{ ok?: boolean }>
+    onExportProgress: (cb: (percent: number) => void) => void
+    removeExportProgress: () => void
     checkPythonReady: () => Promise<{ ready: boolean }>
     startPythonSetup: () => Promise<void>
     startPythonBackend: () => Promise<void>

@@ -92,6 +92,12 @@ export function registerFileHandlers(): void {
     shell.showItemInFolder(filePath)
   })
 
+  ipcMain.handle('approve-paths', async (_event, filePaths: string[]) => {
+    for (const fp of filePaths) {
+      if (fp) approvePath(fp)
+    }
+  })
+
   ipcMain.handle('read-local-file', async (_event, filePath: string) => {
     try {
       const normalizedPath = validatePath(filePath, getAllowedRoots())

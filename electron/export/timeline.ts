@@ -1,5 +1,16 @@
 import { urlToFilePath } from './ffmpeg-utils'
 
+export interface ColorCorrection {
+  brightness: number
+  contrast: number
+  saturation: number
+  temperature?: number
+  tint?: number
+  exposure?: number
+  highlights?: number
+  shadows?: number
+}
+
 export interface KenBurnsKeyframe {
   scale: number
   focusX: number // 0–100 (% of frame width), 50 = center
@@ -20,6 +31,7 @@ export interface ExportClip {
   speed: number; reversed: boolean; flipH: boolean; flipV: boolean; opacity: number; trackIndex: number;
   muted: boolean; volume: number;
   motion?: ClipMotion;
+  colorCorrection?: ColorCorrection;
 }
 
 export interface FlatSegment {
@@ -27,6 +39,7 @@ export interface FlatSegment {
   speed: number; reversed: boolean; flipH: boolean; flipV: boolean; opacity: number;
   muted: boolean; volume: number;
   motion?: ClipMotion;
+  colorCorrection?: ColorCorrection;
 }
 
 function clamp01(v: number): number {
@@ -111,6 +124,7 @@ export function flattenTimeline(clips: ExportClip[]): FlatSegment[] {
         muted: c.muted,
         volume: c.volume,
         motion: segMotion,
+        colorCorrection: c.colorCorrection,
       })
     } else {
       segments.push({
@@ -129,6 +143,7 @@ export function flattenTimeline(clips: ExportClip[]): FlatSegment[] {
         prev.speed === seg.speed && prev.reversed === seg.reversed &&
         prev.flipH === seg.flipH && prev.flipV === seg.flipV &&
         prev.opacity === seg.opacity && prev.muted === seg.muted && prev.volume === seg.volume &&
+        JSON.stringify(prev.colorCorrection) === JSON.stringify(seg.colorCorrection) &&
         !prev.motion && !seg.motion &&
         Math.abs((prev.trimStart + prev.duration * prev.speed) - seg.trimStart) < 0.01) {
       prev.duration += seg.duration

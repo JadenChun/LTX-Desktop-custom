@@ -34,6 +34,9 @@ const RESOLUTIONS = [
   { label: '4K (3840 x 2160)', width: 3840, height: 2160 },
   { label: '1080p (1920 x 1080)', width: 1920, height: 1080 },
   { label: '720p (1280 x 720)', width: 1280, height: 720 },
+  { label: '4K Vertical (2160 x 3840)', width: 2160, height: 3840 },
+  { label: '1080p Vertical (1080 x 1920)', width: 1080, height: 1920 },
+  { label: '720p Vertical (720 x 1280)', width: 720, height: 1280 },
 ]
 
 const FRAME_RATES = [24, 25, 30, 60]
@@ -139,7 +142,10 @@ function escapeXml(str: string): string {
     .replace(/'/g, '&apos;')
 }
 
-export function ExportModal({ open, onClose, clips, tracks, timeline, projectName }: ExportModalProps) {
+
+export function ExportModal({
+  open, onClose, clips, tracks, timeline, projectName
+}: ExportModalProps) {
   const [exportStatus, setExportStatus] = useState<ExportStatus>('idle')
   const [exportType, setExportType] = useState<'package' | 'video' | null>(null)
   const [exportProgress, setExportProgress] = useState(0)
@@ -275,16 +281,31 @@ export function ExportModal({ open, onClose, clips, tracks, timeline, projectNam
           muted: c.muted || false,
           volume: c.volume ?? 1,
           motion: c.motion,
+          colorCorrection: c.colorCorrection,
         }))
 
-      // Compute subtitle data for burn-in
+      // Compute subtitle data for burn-in — font size is computed deterministically
+      // in generateAssContent based on export resolution, so no scaling needed here.
       const subtitleData = (burnSubtitles && timeline.subtitles) ? timeline.subtitles.map(sub => {
         const track = tracks[sub.trackIndex]
         const style = { ...DEFAULT_SUBTITLE_STYLE, ...(track?.subtitleStyle || {}), ...sub.style }
-        return { text: sub.text, startTime: sub.startTime, endTime: sub.endTime, style }
+
+        return {
+          text: sub.text,
+          startTime: sub.startTime,
+          endTime: sub.endTime,
+          style
+        }
       }) : []
 
-      setExportFrameInfo('Starting ffmpeg...')
+      setExportFrameInfo('Rendering...')
+
+      // Listen for progress events from the main process
+      window.electronAPI?.onExportProgress((percent: number) => {
+        if (!abortRef.current) {
+          setExportProgress(percent)
+        }
+      })
 
       const result = await window.electronAPI?.exportNative({
         clips: exportClips,
@@ -298,6 +319,8 @@ export function ExportModal({ open, onClose, clips, tracks, timeline, projectNam
         subtitles: subtitleData.length > 0 ? subtitleData : undefined,
       })
 
+      window.electronAPI?.removeExportProgress()
+
       if (result?.error) {
         throw new Error(result.error)
       }
@@ -307,6 +330,7 @@ export function ExportModal({ open, onClose, clips, tracks, timeline, projectNam
       setExportFrameInfo('Export complete')
       setExportStatus('done')
     } catch (err) {
+      window.electronAPI?.removeExportProgress()
       setExportError(String(err))
       setExportStatus('error')
     }

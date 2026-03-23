@@ -1,5 +1,5 @@
 import React from 'react'
-import { MessageSquare, Trash2 } from 'lucide-react'
+import { MessageSquare, Trash2, SplitSquareVertical } from 'lucide-react'
 import type { SubtitleClip, SubtitleStyle } from '../../types/project'
 import { DEFAULT_SUBTITLE_STYLE } from '../../types/project'
 
@@ -10,6 +10,7 @@ interface SubtitlePropertiesPanelProps {
   onResizeDragStart: (e: React.MouseEvent) => void
   updateSubtitle: (id: string, updates: Partial<SubtitleClip>) => void
   deleteSubtitle: (id: string) => void
+  splitSubtitleProgressive?: (id: string, wordsPerChunk?: number) => void
 }
 
 export function SubtitlePropertiesPanel({
@@ -19,6 +20,7 @@ export function SubtitlePropertiesPanel({
   onResizeDragStart,
   updateSubtitle,
   deleteSubtitle,
+  splitSubtitleProgressive,
 }: SubtitlePropertiesPanelProps) {
   const subStyle = { ...DEFAULT_SUBTITLE_STYLE, ...trackStyle, ...selectedSub.style }
 
@@ -102,6 +104,24 @@ export function SubtitlePropertiesPanel({
               Duration: {(selectedSub.endTime - selectedSub.startTime).toFixed(2)}s
             </span>
           </div>
+
+          {/* Progressive Split */}
+          {splitSubtitleProgressive && selectedSub.text.trim().split(/\s+/).length > 4 && (
+            <div>
+              <label className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold mb-1.5 block">Progressive</label>
+              <button
+                onClick={() => splitSubtitleProgressive(selectedSub.id)}
+                className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium bg-amber-600/20 text-amber-300 border border-amber-500/30 hover:bg-amber-600/30 hover:border-amber-500/50 transition-colors"
+                title="Split this subtitle into short progressive chunks (~4 words each) that appear one after another, like TikTok/Reels captions"
+              >
+                <SplitSquareVertical className="h-3.5 w-3.5" />
+                Split into progressive chunks
+              </button>
+              <span className="text-[9px] text-zinc-600 mt-1 block">
+                {selectedSub.text.trim().split(/\s+/).length} words → ~{Math.ceil(selectedSub.text.trim().split(/\s+/).length / 4)} chunks
+              </span>
+            </div>
+          )}
 
           {/* Style */}
           <div>

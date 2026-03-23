@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 import type { Project, Asset, AssetTake, ViewType, ProjectTab, Timeline } from '../types/project'
 import { createDefaultTimeline } from '../types/project'
-import { backendFetch } from '../lib/backend'
+import { backendFetch, backendSseUrl } from '../lib/backend'
 import { logger } from '../lib/logger'
 
 interface ProjectContextType {
@@ -159,6 +159,33 @@ function recoverAssetUrls(project: Project): Project {
   return { ...project, assets: fixedAssets, timelines: fixedTimelines || project.timelines }
 }
 
+// Repair corrupted trackIndex values (e.g. from subtitle track deletion bug)
+function repairTrackIndices(project: Project): Project {
+  let changed = false
+  const fixedTimelines = project.timelines?.map(tl => {
+    const trackCount = tl.tracks?.length || 0
+    if (trackCount === 0) return tl
+    const fixedClips = tl.clips?.map(clip => {
+      if (clip.trackIndex >= trackCount || clip.trackIndex < 0) {
+        changed = true
+        return { ...clip, trackIndex: Math.max(0, Math.min(trackCount - 1, clip.trackIndex)) }
+      }
+      return clip
+    })
+    const fixedSubtitles = tl.subtitles?.map(sub => {
+      if (sub.trackIndex >= trackCount || sub.trackIndex < 0) {
+        changed = true
+        return { ...sub, trackIndex: Math.max(0, Math.min(trackCount - 1, sub.trackIndex)) }
+      }
+      return sub
+    })
+    if (!changed) return tl
+    return { ...tl, clips: fixedClips || tl.clips, subtitles: fixedSubtitles || tl.subtitles }
+  })
+  if (!changed) return project
+  return { ...project, timelines: fixedTimelines || project.timelines }
+}
+
 // Load initial projects from localStorage synchronously
 function loadProjectsFromStorage(): Project[] {
   try {
@@ -166,8 +193,8 @@ function loadProjectsFromStorage(): Project[] {
     if (stored) {
       const parsed = JSON.parse(stored)
       if (Array.isArray(parsed)) {
-        // Migrate any old projects, then recover broken blob URLs
-        return parsed.map(migrateProject).map(recoverAssetUrls)
+        // Migrate any old projects, then recover broken blob URLs, then repair track indices
+        return parsed.map(migrateProject).map(recoverAssetUrls).map(repairTrackIndices)
       }
     }
   } catch (e) {
@@ -179,7 +206,7 @@ function loadProjectsFromStorage(): Project[] {
 export function ProjectProvider({ children }: { children: React.ReactNode }) {
   const [currentView, setCurrentView] = useState<ViewType>('home')
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null)
-  const [currentTab, setCurrentTab] = useState<ProjectTab>('gen-space')
+  const [currentTab, setCurrentTab] = useState<ProjectTab>('video-editor')
   const [genSpaceEditImageUrl, setGenSpaceEditImageUrl] = useState<string | null>(null)
   const [genSpaceEditMode, setGenSpaceEditMode] = useState<'image' | 'video' | null>(null)
   const [genSpaceAudioUrl, setGenSpaceAudioUrl] = useState<string | null>(null)
@@ -201,101 +228,139 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
     isInitializedRef.current = true
   }, [])
 
-  // Always sync MCP projects from the backend store (so MCP tool edits appear in the UI)
+  // Sync a single MCP project by ID (fetch full state from backend)
+  const syncSingleProject = useCallback(async (projectId: string) => {
+    try {
+      const pr = await backendFetch(`/api/mcp/projects/${projectId}`)
+      if (!pr.ok) return
+      const projectData = await pr.json() as Project
+      const imported = recoverAssetUrls(migrateProject(projectData))
+      imported.mcpLastUpdatedAt = imported.updatedAt
+
+      setProjects(prev => {
+        const existing = prev.find(p => p.id === projectId)
+        if (!existing) {
+          // New project from MCP
+          return [imported, ...prev]
+        }
+        // Check if local edits happened since last sync
+        const lastSeen = existing.mcpLastUpdatedAt ?? 0
+        if (imported.updatedAt <= lastSeen) return prev
+
+        const backups: Project[] = []
+        if (existing.updatedAt > lastSeen) {
+          const now = Date.now()
+          backups.push({
+            ...existing,
+            id: `project-${now}-${Math.random().toString(36).substr(2, 9)}`,
+            name: `${existing.name} (Local backup)`,
+            createdAt: now,
+            updatedAt: now,
+            mcpLastUpdatedAt: undefined,
+            backupOfProjectId: existing.id,
+          })
+        }
+        const replaced = prev.map(p => p.id === projectId ? imported : p)
+        return backups.length ? [...backups, ...replaced] : replaced
+      })
+    } catch (e) {
+      logger.info(`MCP sync for ${projectId} failed: ${e}`)
+    }
+  }, [])
+
+  // Full sync: fetch all MCP project summaries and sync any that are newer
+  const syncAllMcpProjects = useCallback(async () => {
+    try {
+      const resp = await backendFetch('/api/mcp/projects')
+      if (!resp.ok) return
+      const summaries = await resp.json() as { id: string, updatedAt?: number }[]
+
+      const stored = localStorage.getItem(STORAGE_KEY)
+      const existing = stored ? (JSON.parse(stored) as Project[]) : []
+      const existingById = new Map(existing.map(p => [p.id, p]))
+
+      for (const summary of summaries) {
+        if (!summary?.id) continue
+        const local = existingById.get(summary.id)
+        const mcpUpdatedAt = typeof summary.updatedAt === 'number' ? summary.updatedAt : 0
+        const lastSeen = local?.mcpLastUpdatedAt ?? 0
+        if (local && mcpUpdatedAt <= lastSeen) continue
+        await syncSingleProject(summary.id)
+      }
+    } catch (e) {
+      logger.info(`MCP auto-sync skipped: ${e}`)
+    }
+  }, [syncSingleProject])
+
+  // SSE connection for real-time backend→frontend sync, with polling fallback
   useEffect(() => {
-    let inFlight = false
-    const syncMcpProjects = async () => {
-      if (inFlight) return
-      inFlight = true
+    let eventSource: EventSource | null = null
+    let fallbackIntervalId: number | null = null
+    let cancelled = false
+
+    const connectSse = async () => {
+      if (cancelled) return
       try {
-        const resp = await backendFetch('/api/mcp/projects')
-        if (!resp.ok) return
-        const summaries = await resp.json() as { id: string, updatedAt?: number }[]
+        const sseUrl = await backendSseUrl('/api/mcp/events')
+        if (cancelled) return
+        eventSource = new EventSource(sseUrl)
 
-        // Read existing projects directly from localStorage to avoid stale closure
-        const stored = localStorage.getItem(STORAGE_KEY)
-        const existing = stored ? (JSON.parse(stored) as Project[]) : []
-        const existingById = new Map(existing.map(p => [p.id, p]))
-
-        const toAdd: Project[] = []
-        const toUpdate: Project[] = []
-        const toBackupIds: string[] = []
-
-        for (const summary of summaries) {
-          if (!summary?.id) continue
-          const local = existingById.get(summary.id)
-
-          const mcpUpdatedAt = typeof summary.updatedAt === 'number' ? summary.updatedAt : 0
-          const lastSeen = local?.mcpLastUpdatedAt ?? 0
-
-          if (local && mcpUpdatedAt <= lastSeen) continue
-
-          // If the user edited locally since last MCP sync, keep a backup before overwriting.
-          if (local && local.updatedAt > lastSeen) toBackupIds.push(local.id)
-
-          const pr = await backendFetch(`/api/mcp/projects/${summary.id}`)
-          if (!pr.ok) continue
-          const projectData = await pr.json() as Project
-          const imported = recoverAssetUrls(migrateProject(projectData))
-          imported.mcpLastUpdatedAt = imported.updatedAt
-          if (!local) toAdd.push(imported)
-          else toUpdate.push(imported)
+        eventSource.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data) as { type: string; projectId: string; updatedAt: number }
+            if (data.type === 'project_updated' && data.projectId) {
+              void syncSingleProject(data.projectId)
+            }
+          } catch {
+            // Ignore malformed messages
+          }
         }
 
-        if (toAdd.length === 0 && toUpdate.length === 0) return
-
-        setProjects(prev => {
-          const now = Date.now()
-          const updatedById = new Map<string, Project>()
-          for (const p of toUpdate) updatedById.set(p.id, p)
-
-          const backups: Project[] = []
-          const seen = new Set<string>()
-          for (const id of toBackupIds) {
-            if (seen.has(id)) continue
-            seen.add(id)
-            const existingProject = prev.find(p => p.id === id)
-            if (!existingProject) continue
-            const backupId = `project-${now}-${Math.random().toString(36).substr(2, 9)}`
-            backups.push({
-              ...existingProject,
-              id: backupId,
-              name: `${existingProject.name} (Local backup)`,
-              createdAt: now,
-              updatedAt: now,
-              mcpLastUpdatedAt: undefined,
-              backupOfProjectId: existingProject.id,
-            })
+        eventSource.onopen = () => {
+          // SSE connected — stop polling fallback if running
+          if (fallbackIntervalId !== null) {
+            window.clearInterval(fallbackIntervalId)
+            fallbackIntervalId = null
           }
+        }
 
-          const replaced = prev.map(p => updatedById.get(p.id) ?? p)
-          const existingPrevIds = new Set(replaced.map(p => p.id))
-          const newOnes = toAdd.filter(p => !existingPrevIds.has(p.id))
-          return backups.length || newOnes.length ? [...backups, ...newOnes, ...replaced] : replaced
-        })
-
-        const parts: string[] = []
-        if (toAdd.length > 0) parts.push(`imported ${toAdd.length}`)
-        if (toUpdate.length > 0) parts.push(`updated ${toUpdate.length}`)
-        logger.info(`MCP sync: ${parts.join(', ')} project(s)`)
-      } catch (e) {
-        // Silently fail — MCP backend may not be running
-        logger.info(`MCP auto-sync skipped: ${e}`)
-      } finally {
-        inFlight = false
+        eventSource.onerror = () => {
+          // SSE disconnected — close and try to reconnect after 2s
+          eventSource?.close()
+          eventSource = null
+          // Start polling fallback while SSE is down
+          if (fallbackIntervalId === null && !cancelled) {
+            fallbackIntervalId = window.setInterval(() => { void syncAllMcpProjects() }, 2000)
+          }
+          if (!cancelled) {
+            window.setTimeout(connectSse, 2000)
+          }
+        }
+      } catch {
+        // SSE not available — fall back to polling
+        if (fallbackIntervalId === null && !cancelled) {
+          fallbackIntervalId = window.setInterval(() => { void syncAllMcpProjects() }, 2000)
+        }
+        if (!cancelled) {
+          window.setTimeout(connectSse, 5000)
+        }
       }
     }
 
-    syncMcpProjects()
-    const intervalId = window.setInterval(syncMcpProjects, 2000)
-    const onFocus = () => { void syncMcpProjects() }
+    // Do an initial full sync, then connect SSE
+    void syncAllMcpProjects()
+    void connectSse()
+
+    const onFocus = () => { void syncAllMcpProjects() }
     window.addEventListener('focus', onFocus)
 
     return () => {
-      window.clearInterval(intervalId)
+      cancelled = true
+      eventSource?.close()
+      if (fallbackIntervalId !== null) window.clearInterval(fallbackIntervalId)
       window.removeEventListener('focus', onFocus)
     }
-  }, [])
+  }, [syncSingleProject, syncAllMcpProjects])
 
   // If MCP sync created a local backup, automatically merge it back into the MCP store (one-time recovery).
   useEffect(() => {
@@ -409,11 +474,25 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
 
       mcpSaveInFlightRef.current.add(projectId)
       try {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+        // Optimistic concurrency: tell the server what version we last saw
+        if (lastSeen > 0) {
+          headers['If-Match'] = String(lastSeen)
+        }
         const resp = await backendFetch(`/api/mcp/projects/${projectId}`, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify(pending),
         })
+        if (resp.status === 409) {
+          // Server has newer version — fetch it and merge
+          const serverProject = await resp.json() as Project
+          const imported = recoverAssetUrls(migrateProject(serverProject))
+          imported.mcpLastUpdatedAt = imported.updatedAt
+          setProjects(prev => prev.map(p => p.id === projectId ? imported : p))
+          mcpSavePendingRef.current.delete(projectId)
+          return
+        }
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
         const saved = await resp.json() as Project
         const serverUpdatedAt = saved.updatedAt
@@ -435,7 +514,7 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
         mcpSaveInFlightRef.current.delete(projectId)
         if (mcpSavePendingRef.current.has(projectId)) queueMcpSave(projectId)
       }
-    }, 600)
+    }, 300)
 
     mcpSaveTimersRef.current.set(projectId, handle)
   }, [])
@@ -450,7 +529,18 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
   }, [])
   
   const currentProject = projects.find(p => p.id === currentProjectId) || null
-  
+
+  // Approve all asset file paths when a project is opened so Electron allows reading them
+  useEffect(() => {
+    if (!currentProject || !window.electronAPI?.approvePaths) return
+    const paths = currentProject.assets
+      .map(a => a.path)
+      .filter((p): p is string => !!p && !p.startsWith('blob:'))
+    if (paths.length > 0) {
+      window.electronAPI.approvePaths(paths).catch(() => {})
+    }
+  }, [currentProjectId])
+
   const createProject = useCallback((name: string): Project => {
     const defaultTimeline = createDefaultTimeline('Timeline 1')
     const newProject: Project = {
@@ -467,6 +557,10 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
   }, [])
   
   const deleteProject = useCallback((id: string) => {
+    // Try to delete from the MCP backend (fire and forget)
+    void backendFetch(`/api/mcp/projects/${id}`, { method: 'DELETE' })
+      .catch((e: any) => logger.info(`Failed to delete project on backend: ${e}`))
+
     setProjects(prev => prev.filter(p => p.id !== id))
     if (currentProjectId === id) {
       setCurrentProjectId(null)
@@ -776,7 +870,7 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
   const openProject = useCallback((id: string) => {
     setCurrentProjectId(id)
     setCurrentView('project')
-    setCurrentTab('gen-space')
+    setCurrentTab('video-editor')
   }, [])
   
   const goHome = useCallback(() => {
