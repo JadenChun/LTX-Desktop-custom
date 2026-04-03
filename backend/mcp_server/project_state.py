@@ -108,6 +108,8 @@ class SubtitleStyle(SchemaModel):
     backgroundColor: str = "transparent"
     position: str = "bottom"     # bottom|top|center
     italic: bool = False
+    highlightEnabled: bool = False
+    highlightColor: str = "#FFDD00"
 
 
 class SubtitleClip(SchemaModel):
@@ -254,10 +256,14 @@ class ProjectStore:
         """Write active project to disk. Caller must hold _lock."""
         if self._active is None:
             return
-        self._project_file(self._active.id).write_text(
-            self._active.model_dump_json(indent=2, exclude_none=False),
-            encoding="utf-8",
-        )
+        
+        # Optimize JSON: remove indent, exclude None values to minimize file size
+        data = self._active.model_dump_json(indent=None, exclude_none=True)
+        path = self._project_file(self._active.id)
+        
+        # Synchronous write is still used for now but with optimized data,
+        # its blocking time is minimized. 
+        path.write_text(data, encoding="utf-8")
 
     def _touch(self) -> tuple[str, int] | None:
         """Update updatedAt and persist. Caller must hold _lock.

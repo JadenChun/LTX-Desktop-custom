@@ -200,7 +200,7 @@ function buildKenBurnsChain(motion: KenBurnsMotion, segDuration: number, w: numb
 
 export interface ExportSubtitle {
   text: string; startTime: number; endTime: number;
-  style: { fontSize: number; fontFamily: string; fontWeight: string; color: string; backgroundColor: string; position: string; italic: boolean };
+  style: { fontSize: number; fontFamily: string; fontWeight: string; color: string; backgroundColor: string; position: string; italic: boolean; highlightEnabled?: boolean; highlightColor?: string };
 }
 
 export interface ExportTextOverlay {
@@ -302,7 +302,10 @@ export function generateAssContent(
       outline = Math.max(1, Math.round(2 * (height / 1080)))
     }
 
-    lines.push(`Style: Sub${i},${fontName},${fontSize},${primaryColor},&H000000FF,&H00000000,${backColor},${bold},${italic},${borderStyle},${outline},${shadowDist},${alignment},${marginLR},${marginLR},${marginV},1`)
+    // For highlight-enabled subtitles, SecondaryColour is the dimmed (pre-highlight) color used by \kf karaoke fill
+    const secondaryColor = s.highlightEnabled ? cssColorToAss(s.color, 0.4) : '&H000000FF'
+
+    lines.push(`Style: Sub${i},${fontName},${fontSize},${primaryColor},${secondaryColor},&H00000000,${backColor},${bold},${italic},${borderStyle},${outline},${shadowDist},${alignment},${marginLR},${marginLR},${marginV},1`)
   }
 
   for (let i = 0; i < textOverlays.length; i++) {
@@ -345,8 +348,28 @@ export function generateAssContent(
     const sub = subtitles[i]
     const start = formatAssTime(sub.startTime)
     const end = formatAssTime(sub.endTime)
-    const text = escapeAssText(sub.text)
-    lines.push(`Dialogue: 20,${start},${end},Sub${i},,0,0,0,,${text}`)
+
+    if (sub.style.highlightEnabled) {
+      // Karaoke-style progressive word highlight using \kf tags
+      const highlightColorAss = cssColorToAss(sub.style.highlightColor || '#FFDD00')
+      const words = sub.text.trim().split(/\s+/).filter(Boolean)
+      const totalChars = words.reduce((sum, w) => sum + w.length, 0)
+      const totalCs = Math.round((sub.endTime - sub.startTime) * 100)
+
+      let karaokeText = `{\\1c${highlightColorAss}}`
+      for (let w = 0; w < words.length; w++) {
+        const wordCs = w === words.length - 1
+          ? totalCs - words.slice(0, w).reduce((sum, wd) => sum + Math.round(totalCs * (wd.length / totalChars)), 0)
+          : Math.round(totalCs * (words[w].length / totalChars))
+        const escapedWord = escapeAssText(words[w])
+        karaokeText += `{\\kf${wordCs}}${escapedWord}${w < words.length - 1 ? ' ' : ''}`
+      }
+
+      lines.push(`Dialogue: 20,${start},${end},Sub${i},,0,0,0,,${karaokeText}`)
+    } else {
+      const text = escapeAssText(sub.text)
+      lines.push(`Dialogue: 20,${start},${end},Sub${i},,0,0,0,,${text}`)
+    }
   }
 
   for (let i = 0; i < textOverlays.length; i++) {

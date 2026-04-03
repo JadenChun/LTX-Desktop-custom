@@ -280,6 +280,8 @@ export function ExportModal({
           trackIndex: c.trackIndex,
           muted: c.muted || false,
           volume: c.volume ?? 1,
+          transitionIn: c.transitionIn,
+          transitionOut: c.transitionOut,
           motion: c.motion,
           colorCorrection: c.colorCorrection,
         }))

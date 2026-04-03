@@ -55,12 +55,17 @@ export function SubtitleTrackStyleEditor({
                 fontFamily: ts.fontFamily,
                 fontWeight: ts.fontWeight,
                 fontStyle: ts.italic ? 'italic' : 'normal',
-                color: ts.color,
+                color: ts.highlightEnabled ? undefined : ts.color,
                 backgroundColor: ts.backgroundColor,
                 textShadow: '1px 1px 3px rgba(0,0,0,0.8)',
               }}
             >
-              Preview subtitle
+              {ts.highlightEnabled ? (
+                <>
+                  <span style={{ color: ts.highlightColor || '#FFDD00', opacity: 1 }}>Preview </span>
+                  <span style={{ color: ts.color, opacity: 0.4 }}>subtitle</span>
+                </>
+              ) : 'Preview subtitle'}
             </span>
           </div>
 
@@ -149,6 +154,22 @@ export function SubtitleTrackStyleEditor({
               <option value="center">Center</option>
               <option value="top">Top</option>
             </select>
+          </div>
+
+          {/* Highlight */}
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-zinc-400">Highlight</span>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => updateTrackStyle({ highlightEnabled: !ts.highlightEnabled })}
+                className={`px-2 py-0.5 rounded text-[9px] border ${ts.highlightEnabled ? 'bg-amber-600/20 text-amber-300 border-amber-500/40' : 'bg-zinc-800 text-zinc-500 border-zinc-700'}`}
+              >
+                {ts.highlightEnabled ? 'On' : 'Off'}
+              </button>
+              {ts.highlightEnabled && (
+                <input type="color" value={ts.highlightColor} onChange={e => updateTrackStyle({ highlightColor: e.target.value })} className="w-7 h-6 rounded cursor-pointer border border-zinc-700" />
+              )}
+            </div>
           </div>
 
           <div className="border-t border-zinc-800 pt-3 mt-3">

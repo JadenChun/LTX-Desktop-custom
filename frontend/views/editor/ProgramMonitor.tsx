@@ -743,7 +743,27 @@ export function ProgramMonitor({
                             textShadow: '1px 1px 3px rgba(0,0,0,0.8)',
                           }}
                         >
-                          {sub.text}
+                          {style.highlightEnabled ? (() => {
+                            const segments = sub.text.split(/(\s+)/)
+                            const nonSpaceWords = segments.filter(w => w.trim())
+                            const totalChars = nonSpaceWords.reduce((sum, w) => sum + w.length, 0)
+                            const progress = totalChars > 0 ? Math.max(0, Math.min(1, (currentTime - sub.startTime) / (sub.endTime - sub.startTime))) : 0
+                            const highlightedChars = progress * totalChars
+                            let charsSoFar = 0
+                            return segments.map((segment, i) => {
+                              if (!segment.trim()) return segment
+                              const wordStart = charsSoFar
+                              charsSoFar += segment.length
+                              const isHighlighted = wordStart < highlightedChars
+                              return (
+                                <span key={i} style={{
+                                  color: isHighlighted ? (style.highlightColor || '#FFDD00') : style.color,
+                                  opacity: isHighlighted ? 1 : 0.4,
+                                  transition: 'color 0.1s, opacity 0.1s',
+                                }}>{segment}</span>
+                              )
+                            })
+                          })() : sub.text}
                         </span>
                       </div>
                     )

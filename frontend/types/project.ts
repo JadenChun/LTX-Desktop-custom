@@ -72,6 +72,8 @@ export interface SubtitleStyle {
   backgroundColor: string  // hex color with alpha, default '#00000099'
   position: 'bottom' | 'top' | 'center'  // vertical position, default 'bottom'
   italic: boolean
+  highlightEnabled: boolean   // progressive word-by-word highlight (karaoke-style), default false
+  highlightColor: string      // hex color for highlighted words, default '#FFDD00'
 }
 
 export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
@@ -82,6 +84,8 @@ export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
   backgroundColor: 'transparent',
   position: 'bottom',
   italic: false,
+  highlightEnabled: false,
+  highlightColor: '#FFDD00',
 }
 
 // A single subtitle cue on the timeline
@@ -360,6 +364,29 @@ export interface KenBurnsMotion {
 
 export type ClipMotion = KenBurnsMotion
 
+// Highlight overlay style (translucent rectangle that scrolls across the video)
+export interface HighlightStyle {
+  startX: number      // start X center (% of frame, 0-100)
+  startY: number      // start Y center (% of frame, 0-100)
+  endX: number        // end X center (% of frame, 0-100)
+  endY: number        // end Y center (% of frame, 0-100)
+  width: number       // width (% of frame, 0-100)
+  height: number      // height (% of frame, 0-100)
+  color: string       // CSS color with alpha, e.g. 'rgba(255,221,0,0.3)'
+  borderRadius: number // corner radius in px
+}
+
+export const DEFAULT_HIGHLIGHT_STYLE: HighlightStyle = {
+  startX: 10,
+  startY: 50,
+  endX: 90,
+  endY: 50,
+  width: 15,
+  height: 6,
+  color: 'rgba(255,221,0,0.3)',
+  borderRadius: 4,
+}
+
 export const TEXT_PRESETS: TextPreset[] = [
   { id: 'centered-title', name: 'Centered Title', category: 'titles', style: { text: 'Title', fontSize: 72, fontWeight: 'bold', positionX: 50, positionY: 50, textAlign: 'center' } },
   { id: 'big-bold', name: 'Big & Bold', category: 'titles', style: { text: 'HEADLINE', fontSize: 96, fontWeight: '900', positionX: 50, positionY: 45, textAlign: 'center', letterSpacing: 4 } },
@@ -373,7 +400,7 @@ export const TEXT_PRESETS: TextPreset[] = [
 export interface TimelineClip {
   id: string
   assetId: string | null
-  type: 'video' | 'image' | 'audio' | 'adjustment' | 'text'
+  type: 'video' | 'image' | 'audio' | 'adjustment' | 'text' | 'highlight'
   startTime: number
   duration: number
   trimStart: number
@@ -405,6 +432,8 @@ export interface TimelineClip {
   letterbox?: LetterboxSettings
   // Text overlay
   textStyle?: TextOverlayStyle
+  // Highlight overlay (scrolling translucent rectangle)
+  highlightStyle?: HighlightStyle
   // Motion effects (pan/zoom)
   motion?: ClipMotion
 }

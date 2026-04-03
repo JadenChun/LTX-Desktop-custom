@@ -1,6 +1,6 @@
 import { useCallback } from 'react'
-import type { Asset, TimelineClip, Track, TransitionType, SubtitleClip, ClipEffect, EffectType, TextOverlayStyle } from '../../types/project'
-import { DEFAULT_COLOR_CORRECTION, DEFAULT_LETTERBOX, EFFECT_DEFINITIONS, DEFAULT_TEXT_STYLE } from '../../types/project'
+import type { Asset, TimelineClip, Track, TransitionType, SubtitleClip, ClipEffect, EffectType, TextOverlayStyle, HighlightStyle } from '../../types/project'
+import { DEFAULT_COLOR_CORRECTION, DEFAULT_LETTERBOX, EFFECT_DEFINITIONS, DEFAULT_TEXT_STYLE, DEFAULT_HIGHLIGHT_STYLE } from '../../types/project'
 import type { ParsedTimeline } from '../../lib/timeline-import'
 import { exportFcp7Xml } from '../../lib/timeline-import'
 import { resolveOverlaps, DEFAULT_DISSOLVE_DURATION } from './video-editor-utils'
@@ -53,44 +53,46 @@ export function useClipOperations(params: UseClipOperationsParams) {
       }
     }
 
-    // Check source patching: if the target track is unpatched, skip creating the clip on it
-    const videoPatched = track.sourcePatched !== false
     const isAdjustment = asset.type === 'adjustment'
     const isVideoAsset = asset.type === 'video'
     const isAudioAsset = asset.type === 'audio'
     const isImageAsset = asset.type === 'image'
-    
-    // For audio-only assets dropped on an unpatched track, bail
-    if (isAudioAsset && !videoPatched) return
-    
-    // For video/image assets: check if the target video track is patched
-    const createVideoClip = (isVideoAsset || isImageAsset || isAdjustment) && videoPatched
-    
-    // For video assets: check if any audio track is patched (for linked audio)
-    const needsAudioClip = isVideoAsset && !isAdjustment
-    const audioPatched = needsAudioClip && tracks.some(t => t.kind === 'audio' && !t.locked && t.sourcePatched !== false)
-    const createAudioClip = needsAudioClip && audioPatched
-    
-    // If nothing would be created, bail
-    if (!createVideoClip && !createAudioClip) return
-    
+
+    // Route drops to a compatible track kind when needed.
+    let resolvedTrackIndex = trackIndex
+    if (isAudioAsset && track.kind !== 'audio') {
+      const firstUnlockedAudio = tracks.findIndex(t => t.kind === 'audio' && !t.locked)
+      resolvedTrackIndex = firstUnlockedAudio >= 0 ? firstUnlockedAudio : trackIndex
+    } else if (!isAudioAsset && track.kind === 'audio') {
+      const firstUnlockedVideo = tracks.findIndex(t => t.kind !== 'audio' && !t.locked)
+      resolvedTrackIndex = firstUnlockedVideo >= 0 ? firstUnlockedVideo : trackIndex
+    }
+
+    const resolvedTrack = tracks[resolvedTrackIndex]
+    if (!resolvedTrack || resolvedTrack.locked) return
+
+    const createPrimaryClip = isVideoAsset || isImageAsset || isAdjustment || isAudioAsset
+    const createLinkedAudioClip = isVideoAsset && !isAdjustment
+
+    if (!createPrimaryClip) return
+
     let clipStartTime = startTime
     if (clipStartTime === undefined) {
-      const trackClips = clips.filter(c => c.trackIndex === trackIndex)
-      clipStartTime = trackClips.reduce((max, clip) => 
+      const trackClips = clips.filter(c => c.trackIndex === resolvedTrackIndex)
+      clipStartTime = trackClips.reduce((max, clip) =>
         Math.max(max, clip.startTime + clip.duration), 0
       )
     }
-    
+
     const clipDuration = asset.duration || (isAdjustment ? 10 : 5)
     const videoClipId = `clip-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
     const audioClipId = `clip-${Date.now()}-a-${Math.random().toString(36).substr(2, 9)}`
-    
+
     let audioTrackIndex = -1
-    if (createAudioClip) {
-      audioTrackIndex = tracks.findIndex(t => t.kind === 'audio' && !t.locked && t.sourcePatched !== false)
+    if (createLinkedAudioClip) {
+      audioTrackIndex = tracks.findIndex(t => t.kind === 'audio' && !t.locked)
       if (audioTrackIndex < 0) {
-        // No patched audio track exists — create one
+        // No unlocked audio track exists - create one
         const audioTrackCount = tracks.filter(t => t.kind === 'audio').length
         const newAudioTrack: Track = {
           id: `track-${Date.now()}-audio`,
@@ -103,10 +105,10 @@ export function useClipOperations(params: UseClipOperationsParams) {
         setTracks(prev => [...prev, newAudioTrack])
       }
     }
-    
+
     const newClips: TimelineClip[] = []
-    
-    if (createVideoClip) {
+
+    if (createPrimaryClip) {
       const newClip: TimelineClip = {
         id: videoClipId,
         assetId: asset.id,
@@ -119,7 +121,7 @@ export function useClipOperations(params: UseClipOperationsParams) {
         reversed: false,
         muted: false,
         volume: 1,
-        trackIndex,
+        trackIndex: resolvedTrackIndex,
         asset,
         flipH: false,
         flipV: false,
@@ -128,12 +130,12 @@ export function useClipOperations(params: UseClipOperationsParams) {
         colorCorrection: { ...DEFAULT_COLOR_CORRECTION },
         opacity: 100,
         ...(isAdjustment ? { letterbox: { ...DEFAULT_LETTERBOX } } : {}),
-        ...(createAudioClip && audioTrackIndex >= 0 ? { linkedClipIds: [audioClipId] } : {}),
+        ...(createLinkedAudioClip && audioTrackIndex >= 0 ? { linkedClipIds: [audioClipId] } : {}),
       }
       newClips.push(newClip)
     }
-    
-    if (createAudioClip && audioTrackIndex >= 0) {
+
+    if (createLinkedAudioClip && audioTrackIndex >= 0) {
       const audioClip: TimelineClip = {
         id: audioClipId,
         assetId: asset.id,
@@ -154,51 +156,77 @@ export function useClipOperations(params: UseClipOperationsParams) {
         transitionOut: { type: 'none', duration: 0.5 },
         colorCorrection: { ...DEFAULT_COLOR_CORRECTION },
         opacity: 100,
-        ...(createVideoClip ? { linkedClipIds: [videoClipId] } : {}),
+        ...(createPrimaryClip ? { linkedClipIds: [videoClipId] } : {}),
       }
       newClips.push(audioClip)
     }
-    
+
     if (newClips.length === 0) return
-    
+
     const newIds = new Set(newClips.map(c => c.id))
     pushUndo()
     setClips(prev => resolveOverlaps([...prev, ...newClips], newIds))
   }
-  
+
   const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
     if (!files || !currentProjectId) return
-    
+
     for (const file of Array.from(files)) {
       const isVideo = file.type.startsWith('video/')
       const isAudio = file.type.startsWith('audio/')
       const isImage = file.type.startsWith('image/')
-      
+
       if (!isVideo && !isAudio && !isImage) continue
-      
-      // In Electron, File objects have a .path property with the full filesystem path
-      const electronFilePath = (file as any).path as string | undefined
-      
+
       let persistentUrl: string
       let persistentPath: string
-      
-      if (electronFilePath) {
-        // Reference the original file in place (no copy)
-        const normalized = electronFilePath.replace(/\\/g, '/')
-        persistentUrl = normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`
-        persistentPath = electronFilePath
-      } else {
-        // Non-Electron environment: use blob URL
+
+      // Always copy to outputs directory for persistence across sessions
+      // This ensures the file is accessible after app restart
+      try {
+        const arrayBuffer = await file.arrayBuffer()
+
+        // Save file to a persistent location in the outputs directory
+        const fileName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+        const timestamp = Date.now()
+        const savedFileName = `${timestamp}_${fileName}`
+
+        // Use electronAPI to save the file if available
+        if (window.electronAPI?.saveBinaryFile) {
+          const result = await window.electronAPI.saveBinaryFile(
+            `outputs/${savedFileName}`,
+            arrayBuffer
+          )
+          if (result?.success) {
+            // Convert the saved file path to a file:// URL
+            const savedPath = result.path || `outputs/${savedFileName}`
+            const normalized = savedPath.replace(/\\/g, '/')
+            persistentUrl = normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`
+            persistentPath = savedPath
+          } else {
+            // Fallback to blob URL if save fails
+            console.warn('Failed to save file to outputs, using blob URL:', result?.error)
+            persistentUrl = URL.createObjectURL(file)
+            persistentPath = file.name
+          }
+        } else {
+          // Fallback to blob URL if electronAPI is not available
+          persistentUrl = URL.createObjectURL(file)
+          persistentPath = file.name
+        }
+      } catch (err) {
+        console.warn('Failed to copy file to outputs, using blob URL:', err)
+        // Fallback to blob URL if save fails
         persistentUrl = URL.createObjectURL(file)
         persistentPath = file.name
       }
-      
+
       let duration = 5
       if (isVideo || isAudio) {
         duration = await getMediaDuration(persistentUrl, isAudio)
       }
-      
+
       addAsset(currentProjectId, {
         type: isVideo ? 'video' : isAudio ? 'audio' : 'image',
         path: persistentPath,
@@ -208,12 +236,12 @@ export function useClipOperations(params: UseClipOperationsParams) {
         duration,
       })
     }
-    
+
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
   }
-  
+
   const getMediaDuration = (url: string, isAudio = false): Promise<number> => {
     return new Promise((resolve) => {
       const media = document.createElement(isAudio ? 'audio' : 'video')
@@ -260,7 +288,7 @@ export function useClipOperations(params: UseClipOperationsParams) {
     const clip = clips.find(c => c.id === clipId)
     if (!clip) return
     pushUndo()
-    
+
     const newClip: TimelineClip = {
       ...clip,
       id: `clip-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -268,12 +296,12 @@ export function useClipOperations(params: UseClipOperationsParams) {
     }
     setClips([...clips, newClip])
   }
-  
+
   const splitClipAtPlayhead = (clipId: string, atTime?: number, batchClipIds?: string[]) => {
     // Determine which clips to split: either a single clip or a batch
     const idsToSplit = batchClipIds || [clipId]
     const effectiveTime = atTime !== undefined ? atTime : currentTime
-    
+
     // Validate at least one clip is splittable
     const splittable = idsToSplit.filter(id => {
       const c = clips.find(cl => cl.id === id)
@@ -283,32 +311,32 @@ export function useClipOperations(params: UseClipOperationsParams) {
       return sp > 0.1 && sp < c.duration - 0.1
     })
     if (splittable.length === 0) return
-    
+
     pushUndo()
-    
+
     // Track which IDs have already been split (to avoid splitting linked clips twice)
     const alreadySplit = new Set<string>()
     let newClips = [...clips]
-    
+
     for (const splitId of splittable) {
       if (alreadySplit.has(splitId)) continue
-      
+
       const clip = newClips.find(c => c.id === splitId)
       if (!clip) continue
-      
+
       const splitPoint = effectiveTime - clip.startTime
       if (splitPoint <= 0.1 || splitPoint >= clip.duration - 0.1) continue
-      
+
       alreadySplit.add(splitId)
-      
+
       const firstHalfId = clip.id
       const secondHalfId = `clip-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-      
+
       // Collect all linked clips
       const linkedClips = (clip.linkedClipIds || [])
         .map(lid => newClips.find(c => c.id === lid))
         .filter((c): c is TimelineClip => !!c)
-      
+
       const mediaSplitPoint = splitPoint * clip.speed
       const firstHalf: TimelineClip = {
         ...clip,
@@ -323,27 +351,27 @@ export function useClipOperations(params: UseClipOperationsParams) {
         duration: clip.duration - splitPoint,
         trimStart: clip.trimStart + mediaSplitPoint,
       }
-      
+
       newClips = newClips.map(c => c.id === splitId ? firstHalf : c).concat(secondHalf)
-      
+
       // Split each linked clip in sync and rebuild links
       const firstHalfLinkedIds: string[] = []
       const secondHalfLinkedIds: string[] = []
-      
+
       for (const linkedClip of linkedClips) {
         alreadySplit.add(linkedClip.id)
-        
+
         const linkedSplitPoint = effectiveTime - linkedClip.startTime
         if (linkedSplitPoint <= 0.01 || linkedSplitPoint >= linkedClip.duration - 0.01) {
           firstHalfLinkedIds.push(linkedClip.id)
           continue
         }
-        
+
         const linkedSecondId = `clip-${Date.now()}-${Math.random().toString(36).substr(2, 9)}-${linkedClip.id.slice(-4)}`
-        
+
         firstHalfLinkedIds.push(linkedClip.id)
         secondHalfLinkedIds.push(linkedSecondId)
-        
+
         const linkedMediaSplitPoint = linkedSplitPoint * linkedClip.speed
         const linkedFirstHalf: TimelineClip = {
           ...linkedClip,
@@ -360,28 +388,28 @@ export function useClipOperations(params: UseClipOperationsParams) {
           trimStart: linkedClip.trimStart + linkedMediaSplitPoint,
           linkedClipIds: [secondHalfId],
         }
-        
+
         newClips = newClips
           .map(c => c.id === linkedClip.id ? linkedFirstHalf : c)
           .concat(linkedSecondHalf)
       }
-      
+
       // Update linked references on the primary halves
       firstHalf.linkedClipIds = firstHalfLinkedIds.length ? firstHalfLinkedIds : undefined
       secondHalf.linkedClipIds = secondHalfLinkedIds.length ? secondHalfLinkedIds : undefined
-      
+
       // Re-apply the updated halves
       newClips = newClips.map(c => c.id === firstHalfId ? firstHalf : c.id === secondHalfId ? secondHalf : c)
     }
-    
+
     setClips(newClips)
   }
-  
+
   const removeClip = (clipId: string) => {
     // Prevent deleting clips on locked tracks
     const clip = clips.find(c => c.id === clipId)
     if (clip && tracks[clip.trackIndex]?.locked) return
-    
+
     pushUndo()
     // Also remove all linked clips (audio ↔ video pairs)
     const removeIds = new Set([clipId])
@@ -399,10 +427,10 @@ export function useClipOperations(params: UseClipOperationsParams) {
     const leftClip = clips.find(c => c.id === leftClipId)
     const rightClip = clips.find(c => c.id === rightClipId)
     if (!leftClip || !rightClip) return
-    
+
     pushUndo()
     const dissolveDur = DEFAULT_DISSOLVE_DURATION
-    
+
     // Set transition out on left clip and transition in on right clip
     setClips(prev => prev.map(c => {
       if (c.id === leftClipId) {
@@ -415,7 +443,7 @@ export function useClipOperations(params: UseClipOperationsParams) {
     }))
     setHoveredCutPoint(null)
   }, [clips, pushUndo])
-  
+
   const removeCrossDissolve = useCallback((leftClipId: string, rightClipId: string) => {
     pushUndo()
     setClips(prev => prev.map(c => {
@@ -429,7 +457,7 @@ export function useClipOperations(params: UseClipOperationsParams) {
     }))
     setHoveredCutPoint(null)
   }, [pushUndo])
-  
+
   const addTrack = (kind: 'video' | 'audio' = 'video') => {
     pushTrackUndo()
     const sameKindCount = tracks.filter(t => t.kind === kind && t.type !== 'subtitle').length
@@ -442,7 +470,7 @@ export function useClipOperations(params: UseClipOperationsParams) {
     }
     setTracks([...tracks, newTrack])
   }
-  
+
   const deleteTrack = (idx: number) => {
     if (tracks.length <= 1) return
     pushTrackUndo()
@@ -457,7 +485,7 @@ export function useClipOperations(params: UseClipOperationsParams) {
     )
     setTracks(tracks.filter((_, i) => i !== idx))
   }
-  
+
   // --- Adjustment layer operations ---
   // Creates an adjustment layer asset in the project asset panel.
   // The user can then drag it onto any video track like any other asset.
@@ -481,13 +509,13 @@ export function useClipOperations(params: UseClipOperationsParams) {
       .map((t, i) => ({ t, i }))
       .filter(({ t }) => t.kind === 'video' && t.type !== 'subtitle')
       .map(({ i }) => i)
-    
+
     let targetTrack = trackIdx
     if (targetTrack === undefined) {
       // Use the highest video track (topmost layer) or the first available
       targetTrack = videoTrackIndices.length > 0 ? videoTrackIndices[videoTrackIndices.length - 1] : 0
     }
-    
+
     const textStyle: TextOverlayStyle = { ...DEFAULT_TEXT_STYLE, ...styleOverride }
     const newClip: TimelineClip = {
       id: `text-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
@@ -511,7 +539,7 @@ export function useClipOperations(params: UseClipOperationsParams) {
       opacity: 100,
       textStyle,
     }
-    
+
     pushUndo(clips)
     setClips(prev => resolveOverlaps([...prev, newClip], new Set([newClip.id])))
     setSelectedClipIds(new Set([newClip.id]))
@@ -520,26 +548,69 @@ export function useClipOperations(params: UseClipOperationsParams) {
     return newClip.id
   }, [currentTime, tracks, clips])
 
+  const addHighlightClip = useCallback((styleOverride?: Partial<HighlightStyle>, atTime?: number, trackIdx?: number) => {
+    const insertTime = atTime ?? currentTime
+    const videoTrackIndices = tracks
+      .map((t, i) => ({ t, i }))
+      .filter(({ t }) => t.kind === 'video' && t.type !== 'subtitle')
+      .map(({ i }) => i)
+
+    let targetTrack = trackIdx
+    if (targetTrack === undefined) {
+      targetTrack = videoTrackIndices.length > 0 ? videoTrackIndices[videoTrackIndices.length - 1] : 0
+    }
+
+    const highlightStyle: HighlightStyle = { ...DEFAULT_HIGHLIGHT_STYLE, ...styleOverride }
+    const newClip: TimelineClip = {
+      id: `highlight-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+      assetId: null,
+      type: 'highlight',
+      startTime: insertTime,
+      duration: 5,
+      trimStart: 0,
+      trimEnd: 0,
+      speed: 1,
+      reversed: false,
+      muted: false,
+      volume: 1,
+      trackIndex: targetTrack,
+      asset: null,
+      flipH: false,
+      flipV: false,
+      transitionIn: { type: 'none', duration: 0 },
+      transitionOut: { type: 'none', duration: 0 },
+      colorCorrection: { ...DEFAULT_COLOR_CORRECTION },
+      opacity: 100,
+      highlightStyle,
+    }
+
+    pushUndo(clips)
+    setClips(prev => resolveOverlaps([...prev, newClip], new Set([newClip.id])))
+    setSelectedClipIds(new Set([newClip.id]))
+    setCurrentTime(insertTime + 0.1)
+    return newClip.id
+  }, [currentTime, tracks, clips])
+
   const handleImportTimeline = useCallback(async (parsed: ParsedTimeline) => {
     if (!currentProjectId) return
-    
+
     // Build a map from media ref id → our Asset
     const mediaToAsset = new Map<string, Asset>()
-    
+
     for (const ref of parsed.mediaRefs) {
       const filePath = ref.relinkedPath || ref.resolvedPath
       const fileName = ref.name || filePath.split(/[/\\]/).pop() || 'Unknown'
-      
+
       let url = ''
       let assetPath = filePath
-      
+
       // If file is found, build a file:// URL referencing the original location (no copy)
       if (ref.found && filePath) {
         const normalized = filePath.replace(/\\/g, '/')
         url = normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`
         assetPath = filePath
       }
-      
+
       // Create an asset in the project
       const resolution = (ref.width && ref.height) ? `${ref.width}x${ref.height}` : 'Unknown'
       const asset = addAsset(currentProjectId, {
@@ -551,10 +622,10 @@ export function useClipOperations(params: UseClipOperationsParams) {
         duration: ref.duration || undefined,
         bin: 'Imported',
       })
-      
+
       mediaToAsset.set(ref.id, asset)
     }
-    
+
     // Build tracks with NLE naming and kind
     const totalTracks = Math.max(parsed.videoTrackCount + parsed.audioTrackCount, 1)
     const newTracks: Track[] = []
@@ -568,20 +639,20 @@ export function useClipOperations(params: UseClipOperationsParams) {
         kind: isAudio ? 'audio' : 'video',
       })
     }
-    
+
     // Build clips — first pass: create all clips, second pass: establish links
     const newClips: TimelineClip[] = []
     // Map from parsed clip array index → generated clip id (for linking)
     const parsedIndexToClipId = new Map<number, string>()
-    
+
     for (let pcIdx = 0; pcIdx < parsed.clips.length; pcIdx++) {
       const pc = parsed.clips[pcIdx]
       const asset = mediaToAsset.get(pc.mediaRefId)
       if (!asset) continue
-      
+
       const clipId = `clip-${Date.now()}-${Math.random().toString(36).substr(2, 9)}-${pcIdx}`
       parsedIndexToClipId.set(pcIdx, clipId)
-      
+
       const clip: TimelineClip = {
         id: clipId,
         assetId: asset.id,
@@ -606,7 +677,7 @@ export function useClipOperations(params: UseClipOperationsParams) {
       }
       newClips.push(clip)
     }
-    
+
     // Second pass: establish bidirectional linkedClipIds between video ↔ audio pairs
     for (let pcIdx = 0; pcIdx < parsed.clips.length; pcIdx++) {
       const pc = parsed.clips[pcIdx]
@@ -614,7 +685,7 @@ export function useClipOperations(params: UseClipOperationsParams) {
       const audioClipId = parsedIndexToClipId.get(pcIdx)
       const videoClipId = parsedIndexToClipId.get(pc.linkedVideoClipIndex)
       if (!audioClipId || !videoClipId) continue
-      
+
       const audioClip = newClips.find(c => c.id === audioClipId)
       const videoClip = newClips.find(c => c.id === videoClipId)
       if (audioClip && videoClip) {
@@ -626,20 +697,20 @@ export function useClipOperations(params: UseClipOperationsParams) {
         if (!videoClip.linkedClipIds.includes(audioClipId)) videoClip.linkedClipIds.push(audioClipId)
       }
     }
-    
+
     // Create a new timeline with these tracks and clips
     const newTimeline = addTimeline(currentProjectId, parsed.name || 'Imported Timeline')
-    
+
     // Update with our custom tracks and clips
     updateTimeline(currentProjectId, newTimeline.id, {
       tracks: newTracks,
       clips: newClips,
     })
-    
+
     // Switch to the new timeline and open its tab
     setActiveTimeline(currentProjectId, newTimeline.id)
     setOpenTimelineIds(prev => { const next = new Set(prev); next.add(newTimeline.id); return next })
-    
+
     // Load locally
     setTracks(newTracks)
     setClips(newClips)
@@ -647,13 +718,13 @@ export function useClipOperations(params: UseClipOperationsParams) {
     setCurrentTime(0)
     setSelectedClipIds(new Set())
     setSelectedSubtitleId(null)
-    
+
   }, [currentProjectId, addAsset, addTimeline, updateTimeline, setActiveTimeline])
-  
+
   // --- Export timeline as FCP 7 XML ---
   const handleExportTimelineXml = useCallback(async () => {
     if (!activeTimeline) return
-    
+
     // Build clip data for export
     const exportClips = clips
       .filter(c => c.asset && c.type !== 'adjustment')
@@ -666,12 +737,12 @@ export function useClipOperations(params: UseClipOperationsParams) {
           const take = asset.takes[Math.min(idx, asset.takes.length - 1)]
           filePath = take.path
         }
-        
+
         // Parse resolution
         const resParts = asset.resolution?.match(/(\d+)x(\d+)/)
         const width = resParts ? parseInt(resParts[1]) : 1920
         const height = resParts ? parseInt(resParts[2]) : 1080
-        
+
         return {
           name: c.importedName || asset.path?.split(/[/\\]/).pop() || 'clip',
           filePath,
@@ -685,7 +756,7 @@ export function useClipOperations(params: UseClipOperationsParams) {
           height,
         }
       })
-    
+
     const xmlContent = exportFcp7Xml({
       name: activeTimeline.name,
       fps: 24,
@@ -693,7 +764,7 @@ export function useClipOperations(params: UseClipOperationsParams) {
       height: 1080,
       clips: exportClips,
     })
-    
+
     if (window.electronAPI?.showSaveDialog) {
       const filePath = await window.electronAPI.showSaveDialog({
         title: 'Export Timeline as FCP 7 XML',
@@ -731,6 +802,7 @@ export function useClipOperations(params: UseClipOperationsParams) {
     deleteTrack,
     createAdjustmentLayerAsset,
     addTextClip,
+    addHighlightClip,
     handleImportTimeline,
     handleExportTimelineXml,
   }

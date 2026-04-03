@@ -68,6 +68,12 @@ export function urlToFilePath(url: string): string {
     }
     return filePath
   }
+  // blob: URLs are temporary and can't be converted to file paths
+  // Return empty string so the caller can skip this source gracefully
+  if (url.startsWith('blob:')) {
+    logger.warn(`[urlToFilePath] Skipping blob: URL (temporary and cannot be converted to file path): ${url.slice(0, 100)}...`)
+    return ''
+  }
   // Already a file path
   return url
 }
@@ -87,7 +93,7 @@ export function runFfmpeg(
   onProgress?: (timeSec: number) => void,
 ): Promise<{ success: boolean; error?: string }> {
   return new Promise((resolve) => {
-    logger.info( `[ffmpeg] spawn: ${args.join(' ').slice(0, 400)}`)
+    logger.info(`[ffmpeg] spawn: ${args.join(' ').slice(0, 400)}`)
     const proc = spawn(ffmpegPath, args, { stdio: ['pipe', 'pipe', 'pipe'] })
     activeExportProcess = proc
     let stderrLog = ''
@@ -97,7 +103,7 @@ export function runFfmpeg(
       const lines = text.trim().split('\n')
       for (const line of lines) {
         if (line.includes('frame=') || line.includes('Error') || line.includes('error')) {
-          logger.info( `[ffmpeg] ${line.trim().slice(0, 200)}`)
+          logger.info(`[ffmpeg] ${line.trim().slice(0, 200)}`)
         }
         // Parse time= for progress reporting
         if (onProgress) {
@@ -114,7 +120,7 @@ export function runFfmpeg(
         resolve({ success: true })
       } else {
         const errLines = stderrLog.split('\n').filter(l => l.trim()).slice(-5).join('\n')
-        logger.error( `[ffmpeg] exited ${code}:\n${errLines}`)
+        logger.error(`[ffmpeg] exited ${code}:\n${errLines}`)
         resolve({ success: false, error: `FFmpeg failed (code ${code}): ${errLines.slice(0, 300)}` })
       }
     })
@@ -127,7 +133,7 @@ export function runFfmpeg(
 
 export function stopExportProcess(): void {
   if (activeExportProcess) {
-    logger.info( 'Stopping active export process...')
+    logger.info('Stopping active export process...')
     activeExportProcess.kill()
     activeExportProcess = null
   }

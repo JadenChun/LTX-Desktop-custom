@@ -208,6 +208,27 @@ export function SubtitlePropertiesPanel({
                   <option value="top">Top</option>
                 </select>
               </div>
+
+              {/* Highlight */}
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-zinc-400">Highlight</span>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => updateSubtitle(selectedSub.id, { style: { ...selectedSub.style, highlightEnabled: !subStyle.highlightEnabled } })}
+                    className={`px-2 py-0.5 rounded text-[9px] border ${subStyle.highlightEnabled ? 'bg-amber-600/20 text-amber-300 border-amber-500/40' : 'bg-zinc-800 text-zinc-500 border-zinc-700'}`}
+                  >
+                    {subStyle.highlightEnabled ? 'On' : 'Off'}
+                  </button>
+                  {subStyle.highlightEnabled && (
+                    <input
+                      type="color"
+                      value={subStyle.highlightColor || '#FFDD00'}
+                      onChange={(e) => updateSubtitle(selectedSub.id, { style: { ...selectedSub.style, highlightColor: e.target.value } })}
+                      className="w-7 h-6 rounded cursor-pointer border border-zinc-700"
+                    />
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         </div>

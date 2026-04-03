@@ -471,7 +471,26 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams) {
           const trackObj = trks[c.trackIndex]
           const isSoloMuted = anySoloed && !trackObj?.solo
           el.muted = c.muted || trackObj?.muted || isSoloMuted || false
-          el.volume = c.volume
+          const baseVolume = (c.volume ?? 1)
+          
+          // Calculate fade factor based on transitions
+          let fadeFactor = 1.0
+          const timeInClipAtPlayhead = next - c.startTime
+          const isFadeTransition = (t?: string) => t === 'fade-to-black' || t === 'dissolve' || t === 'fade-to-white'
+          
+          if (c.transitionIn && c.transitionIn.duration > 0 && isFadeTransition(c.transitionIn.type)) {
+            if (timeInClipAtPlayhead < c.transitionIn.duration) {
+              fadeFactor *= (timeInClipAtPlayhead / c.transitionIn.duration)
+            }
+          }
+          if (c.transitionOut && c.transitionOut.duration > 0 && isFadeTransition(c.transitionOut.type)) {
+            if (timeInClipAtPlayhead > c.duration - c.transitionOut.duration) {
+              const timeFromEnd = c.duration - timeInClipAtPlayhead
+              fadeFactor *= Math.max(0, timeFromEnd / c.transitionOut.duration)
+            }
+          }
+
+          el.volume = Math.max(0, Math.min(1, baseVolume * fadeFactor))
           
           const computeTarget = (audioEl: HTMLAudioElement, atTime: number) => {
             const assetDur = audioEl.duration || c.duration
@@ -965,7 +984,23 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams) {
       const scrubTrack = tracks[clip.trackIndex]
       const isSoloMutedScrub = anySoloedScrub && !scrubTrack?.solo
       el.muted = clip.muted || scrubTrack?.muted || isSoloMutedScrub || false
-      el.volume = clip.volume
+      const baseVolumeScrub = (clip.volume ?? 1)
+      let fadeFactorScrub = 1.0
+      const isFadeTransitionScrub = (t?: string) => t === 'fade-to-black' || t === 'dissolve' || t === 'fade-to-white'
+      
+      if (clip.transitionIn && clip.transitionIn.duration > 0 && isFadeTransitionScrub(clip.transitionIn.type)) {
+        if (timeInClip < clip.transitionIn.duration) {
+          fadeFactorScrub *= (timeInClip / clip.transitionIn.duration)
+        }
+      }
+      if (clip.transitionOut && clip.transitionOut.duration > 0 && isFadeTransitionScrub(clip.transitionOut.type)) {
+        if (timeInClip > clip.duration - clip.transitionOut.duration) {
+          const timeFromEnd = clip.duration - timeInClip
+          fadeFactorScrub *= Math.max(0, timeFromEnd / clip.transitionOut.duration)
+        }
+      }
+
+      el.volume = Math.max(0, Math.min(1, baseVolumeScrub * fadeFactorScrub))
       
       // Seek to correct position (paused — only for scrub preview)
       if (el.readyState >= 2 && Math.abs(el.currentTime - targetTime) > 0.05) {

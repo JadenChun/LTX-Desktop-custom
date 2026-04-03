@@ -30,6 +30,8 @@ export interface ExportClip {
   url: string; type: string; startTime: number; duration: number; trimStart: number;
   speed: number; reversed: boolean; flipH: boolean; flipV: boolean; opacity: number; trackIndex: number;
   muted: boolean; volume: number;
+  transitionIn?: { type: string; duration: number };
+  transitionOut?: { type: string; duration: number };
   motion?: ClipMotion;
   colorCorrection?: ColorCorrection;
 }
@@ -80,7 +82,7 @@ export function flattenTimeline(clips: ExportClip[]): FlatSegment[] {
     boundaries.add(c.startTime)
     boundaries.add(c.startTime + c.duration)
   }
-  const sorted = [...boundaries].sort((a, b) => a - b)
+  const sorted = Array.from(boundaries).sort((a, b) => a - b)
 
   const segments: FlatSegment[] = []
 

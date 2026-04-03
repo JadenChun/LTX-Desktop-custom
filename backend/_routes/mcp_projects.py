@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Body, HTTPException, Request
 from starlette.responses import StreamingResponse
 
 router = APIRouter(prefix="/api/mcp", tags=["mcp-projects"])
+logger = logging.getLogger(__name__)
 
 # SSE client queues — each connected EventSource gets one
 _sse_queues: set[asyncio.Queue[str]] = set()
@@ -89,9 +92,24 @@ async def put_mcp_project(
     from mcp_server.project_state import Project
 
     try:
-        project = Project.model_validate(project_payload)
-    except Exception as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        start_time = time.time()
+        payload_size = len(json.dumps(project_payload)) # Use json.dumps for accurate char count
+        logger.debug(f"PUT /projects/{project_id} - Payload size: {payload_size} chars")
+        
+        try:
+            project = Project.model_validate(project_payload)
+            validate_time = time.time() - start_time
+            if validate_time > 0.1: # Only log if it's slow
+                logger.info(f"Project validation took {validate_time:.3f}s")
+        except Exception as e:
+            logger.error(f"Project validation failed: {e}", exc_info=True)
+            raise HTTPException(status_code=422, detail=f"Invalid project state: {e}") from e
+
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        logger.error(f"Error in put_mcp_project before upsert: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
     if project.id != project_id:
         raise HTTPException(status_code=400, detail="Project id mismatch")
@@ -114,7 +132,7 @@ async def put_mcp_project(
     # notify=False: frontend already has the latest state; no need to echo
     # the change back via SSE (which would cause an unnecessary re-fetch).
     saved = store.upsert_project(project, notify=False)
-    return saved.model_dump()
+    return saved.model_dump(exclude_none=True)
 
 
 # ── SSE (Server-Sent Events) ─────────────────────────────────────────────────
