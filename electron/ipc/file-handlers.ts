@@ -180,6 +180,12 @@ export function registerFileHandlers(): void {
     shell.showItemInFolder(filePath)
   })
 
+  handle('approvePaths', async ({ filePaths }) => {
+    for (const fp of filePaths) {
+      if (fp) approvePath(fp)
+    }
+  })
+
   handle('readLocalFile', async ({ filePath }) => {
     try {
       const normalizedPath = validatePath(filePath, getAllowedRoots())
@@ -190,7 +196,7 @@ export function registerFileHandlers(): void {
 
       return readLocalFileAsBase64(normalizedPath)
     } catch (error) {
-      logger.error( `Error reading local file: ${error}`)
+      logger.error(`Error reading local file: ${error}`)
       throw error
     }
   })
@@ -218,18 +224,23 @@ export function registerFileHandlers(): void {
       }
       return { success: true, path: filePath }
     } catch (error) {
-      logger.error( `Error saving file: ${error}`)
+      logger.error(`Error saving file: ${error}`)
       return { success: false, error: String(error) }
     }
   })
 
   handle('saveBinaryFile', async ({ filePath, data }) => {
     try {
-      validatePath(filePath, getAllowedRoots())
-      fs.writeFileSync(filePath, Buffer.from(data))
-      return { success: true, path: filePath }
+      const resolvedPath = validatePath(filePath, getAllowedRoots())
+      // Ensure the parent directory exists before writing
+      const dir = path.dirname(resolvedPath)
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true })
+      }
+      fs.writeFileSync(resolvedPath, Buffer.from(data))
+      return { success: true, path: resolvedPath }
     } catch (error) {
-      logger.error( `Error saving binary file: ${error}`)
+      logger.error(`Error saving binary file: ${error}`)
       return { success: false, error: String(error) }
     }
   })

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef } from 'react'
 import {
   selectActiveTimelineInPoint,
   selectActiveTimelineOutPoint,
+  selectContentDuration,
   selectIsPlaying,
   selectPlayingInOut,
   selectShuttleSpeed,
@@ -26,6 +27,7 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams) {
   const inPoint = useEditorStore(selectActiveTimelineInPoint)
   const outPoint = useEditorStore(selectActiveTimelineOutPoint)
   const totalDuration = useEditorStore(selectTotalDuration)
+  const contentDuration = useEditorStore(selectContentDuration)
 
   const lastStateUpdateRef = useRef(0)
   const prevIsPlayingRef = useRef(isPlaying)
@@ -68,7 +70,9 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams) {
         if (next >= loopEnd) next = loopStart
         else if (next <= loopStart) next = loopEnd
       } else {
-        if (next >= totalDuration) {
+        // Stop at actual content end (not the padded totalDuration minimum)
+        const stopAt = contentDuration > 0 ? contentDuration : totalDuration
+        if (next >= stopAt) {
           next = 0
           stopped = true
         } else if (next < 0) {
@@ -105,6 +109,7 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams) {
     inPoint,
     outPoint,
     totalDuration,
+    contentDuration,
     playbackTimeRef,
     setCurrentTime,
     stopShuttle,

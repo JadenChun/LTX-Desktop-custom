@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { MessageSquare, Trash2 } from 'lucide-react'
+import { MessageSquare, Trash2, SplitSquareVertical } from 'lucide-react'
 import type { SubtitleStyle } from '../../types/project'
 import { DEFAULT_SUBTITLE_STYLE } from '../../types/project'
 import {
@@ -10,7 +10,7 @@ import {
 import { useEditorActions, useEditorStore } from './editor-store'
 
 export function SubtitlePropertiesPanel() {
-  const { updateSubtitle, deleteSubtitle } = useEditorActions()
+  const { updateSubtitle, deleteSubtitle, splitSubtitleProgressive } = useEditorActions()
   const selectedSubtitleId = useEditorStore(selectSelectedSubtitleId)
   const subtitles = useEditorStore(selectSubtitles)
   const tracks = useEditorStore(selectTracks)
@@ -102,6 +102,24 @@ export function SubtitlePropertiesPanel() {
             </span>
           </div>
 
+          {/* Progressive Split */}
+          {selectedSub.text.trim().split(/\s+/).length > 4 && (
+            <div>
+              <label className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold mb-1.5 block">Progressive</label>
+              <button
+                onClick={() => splitSubtitleProgressive(selectedSub.id)}
+                className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium bg-amber-600/20 text-amber-300 border border-amber-500/30 hover:bg-amber-600/30 hover:border-amber-500/50 transition-colors"
+                title="Split this subtitle into short progressive chunks (~4 words each) that appear one after another, like TikTok/Reels captions"
+              >
+                <SplitSquareVertical className="h-3.5 w-3.5" />
+                Split into progressive chunks
+              </button>
+              <span className="text-[9px] text-zinc-600 mt-1 block">
+                {selectedSub.text.trim().split(/\s+/).length} words → ~{Math.ceil(selectedSub.text.trim().split(/\s+/).length / 4)} chunks
+              </span>
+            </div>
+          )}
+
           {/* Style */}
           <div>
             <label className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold mb-1.5 block">Style</label>
@@ -186,6 +204,27 @@ export function SubtitlePropertiesPanel() {
                   <option value="center">Center</option>
                   <option value="top">Top</option>
                 </select>
+              </div>
+
+              {/* Highlight */}
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-zinc-400">Highlight</span>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => updateSubtitle(selectedSub.id, { style: { ...selectedSub.style, highlightEnabled: !subStyle.highlightEnabled } })}
+                    className={`px-2 py-0.5 rounded text-[9px] border ${subStyle.highlightEnabled ? 'bg-amber-600/20 text-amber-300 border-amber-500/40' : 'bg-zinc-800 text-zinc-500 border-zinc-700'}`}
+                  >
+                    {subStyle.highlightEnabled ? 'On' : 'Off'}
+                  </button>
+                  {subStyle.highlightEnabled && (
+                    <input
+                      type="color"
+                      value={subStyle.highlightColor || '#FFDD00'}
+                      onChange={(e) => updateSubtitle(selectedSub.id, { style: { ...selectedSub.style, highlightColor: e.target.value } })}
+                      className="w-7 h-6 rounded cursor-pointer border border-zinc-700"
+                    />
+                  )}
+                </div>
               </div>
             </div>
           </div>

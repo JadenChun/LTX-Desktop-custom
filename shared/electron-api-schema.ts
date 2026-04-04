@@ -13,6 +13,30 @@ export type IpcResult<T extends z.ZodRawShape> = z.infer<ReturnType<typeof ipcRe
 
 const emptyResult = ipcResult({})
 
+const kenBurnsKeyframe = z.object({
+  scale: z.number(),
+  focusX: z.number(),
+  focusY: z.number(),
+})
+
+const kenBurnsMotion = z.object({
+  type: z.literal('ken_burns'),
+  start: kenBurnsKeyframe,
+  end: kenBurnsKeyframe,
+  easing: z.enum(['linear', 'easeInOut']).optional(),
+})
+
+const colorCorrection = z.object({
+  brightness: z.number(),
+  contrast: z.number(),
+  saturation: z.number(),
+  temperature: z.number().optional(),
+  tint: z.number().optional(),
+  exposure: z.number().optional(),
+  highlights: z.number().optional(),
+  shadows: z.number().optional(),
+})
+
 const exportClip = z.object({
   path: z.string(),
   type: z.string(),
@@ -27,6 +51,10 @@ const exportClip = z.object({
   trackIndex: z.number(),
   muted: z.boolean(),
   volume: z.number(),
+  transitionIn: z.object({ type: z.string(), duration: z.number() }).optional(),
+  transitionOut: z.object({ type: z.string(), duration: z.number() }).optional(),
+  motion: kenBurnsMotion.optional(),
+  colorCorrection: colorCorrection.optional(),
 })
 
 const exportSubtitle = z.object({
@@ -41,6 +69,38 @@ const exportSubtitle = z.object({
     backgroundColor: z.string(),
     position: z.string(),
     italic: z.boolean(),
+    highlightEnabled: z.boolean().optional(),
+    highlightColor: z.string().optional(),
+  }),
+})
+
+const exportTextOverlay = z.object({
+  text: z.string(),
+  startTime: z.number(),
+  endTime: z.number(),
+  trackIndex: z.number(),
+  style: z.object({
+    fontFamily: z.string(),
+    fontSize: z.number(),
+    fontWeight: z.string(),
+    fontStyle: z.string(),
+    color: z.string(),
+    backgroundColor: z.string(),
+    textAlign: z.string(),
+    positionX: z.number(),
+    positionY: z.number(),
+    strokeColor: z.string(),
+    strokeWidth: z.number(),
+    shadowColor: z.string(),
+    shadowBlur: z.number(),
+    shadowOffsetX: z.number(),
+    shadowOffsetY: z.number(),
+    letterSpacing: z.number(),
+    lineHeight: z.number(),
+    maxWidth: z.number(),
+    padding: z.number(),
+    borderRadius: z.number(),
+    opacity: z.number(),
   }),
 })
 
@@ -117,6 +177,10 @@ export const electronAPISchemas = {
   },
   showItemInFolder: {
     input: z.object({ filePath: z.string() }),
+    output: z.void(),
+  },
+  approvePaths: {
+    input: z.object({ filePaths: z.array(z.string()) }),
     output: z.void(),
   },
 
@@ -232,6 +296,7 @@ export const electronAPISchemas = {
       quality: z.number(),
       letterbox: z.object({ ratio: z.number(), color: z.string(), opacity: z.number() }).optional(),
       subtitles: z.array(exportSubtitle).optional(),
+      textOverlays: z.array(exportTextOverlay).optional(),
     }),
     output: emptyResult,
   },
@@ -303,6 +368,8 @@ export type ElectronAPI = InvokeAPI & {
   onPythonSetupProgress: (cb: (data: unknown) => void) => void
   removePythonSetupProgress: () => void
   onBackendHealthStatus: (cb: (data: BackendHealthStatus) => void) => (() => void)
+  onExportProgress: (cb: (percent: number) => void) => void
+  removeExportProgress: () => void
   getPathForFile: (file: File) => string
   platform: string
 }

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import hmac
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, Request
@@ -21,6 +22,7 @@ from _routes.image_gen import router as image_gen_router
 from _routes.models import router as models_router
 from _routes.suggest_gap_prompt import router as suggest_gap_prompt_router
 from _routes.retake import router as retake_router
+from _routes.mcp_projects import router as mcp_projects_router
 from _routes.runtime_policy import router as runtime_policy_router
 from _routes.settings import router as settings_router
 from logging_policy import log_http_error, log_unhandled_exception
@@ -46,7 +48,25 @@ def create_app(
     """Create a configured FastAPI app bound to the provided handler."""
     init_state_service(handler)
 
-    app = FastAPI(title=title)
+    # Create MCP server early so we can wire its lifespan into FastAPI.
+    from mcp_server import create_mcp_server
+    mcp_srv = create_mcp_server(handler)
+    # Build the sub-apps (this also creates the session_manager internally).
+    mcp_http_app = mcp_srv.streamable_http_app()
+    mcp_sse_app = mcp_srv.sse_app(mount_path="/mcp-sse")
+
+    @contextlib.asynccontextmanager
+    async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        # Initialize the MCP session manager's task group so it can
+        # handle incoming requests (mounted sub-apps don't get their
+        # own lifespan called by Starlette).
+        async with mcp_srv.session_manager.run():
+            # Register SSE listener for real-time project change notifications
+            from _routes.mcp_projects import register_sse_listener
+            register_sse_listener()
+            yield
+
+    app = FastAPI(title=title, lifespan=_lifespan)
     app.state.admin_token = admin_token  # type: ignore[attr-defined]
     app.add_middleware(
         CORSMiddleware,
@@ -64,11 +84,17 @@ def create_app(
             return await call_next(request)
         if request.method == "OPTIONS":
             return await call_next(request)
+        # MCP endpoints are localhost-only; skip auth so agents need no token
+        if request.url.path.startswith("/mcp"):
+            return await call_next(request)
         def _token_matches(candidate: str) -> bool:
             return hmac.compare_digest(candidate, auth_token)
 
-        # WebSocket: check query param
-        if request.headers.get("upgrade", "").lower() == "websocket":
+        # WebSocket / SSE: check query param (EventSource can't set headers)
+        if (
+            request.headers.get("upgrade", "").lower() == "websocket"
+            or request.url.path == "/api/mcp/events"
+        ):
             if _token_matches(request.query_params.get("token", "")):
                 return await call_next(request)
             return JSONResponse(status_code=401, content={"error": "Unauthorized"})
@@ -116,5 +142,9 @@ def create_app(
     app.include_router(retake_router)
     app.include_router(ic_lora_router)
     app.include_router(runtime_policy_router)
+    app.include_router(mcp_projects_router)
+
+    app.mount("/mcp", mcp_http_app)          # Claude Code, curl, modern clients
+    app.mount("/mcp-sse", mcp_sse_app)      # LM Studio, older SSE clients
 
     return app

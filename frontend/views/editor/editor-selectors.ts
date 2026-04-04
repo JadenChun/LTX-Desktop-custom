@@ -344,6 +344,11 @@ export function selectTotalDuration(state: EditorState): number {
   )
 }
 
+/** Actual content end time (no minimum padding). Used by playback engine to stop at last clip. */
+export function selectContentDuration(state: EditorState): number {
+  return selectClips(state).reduce((max, clip) => Math.max(max, clip.startTime + clip.duration), 0)
+}
+
 export function selectZoom(state: EditorState): number {
   return state.session.tools.zoom
 }

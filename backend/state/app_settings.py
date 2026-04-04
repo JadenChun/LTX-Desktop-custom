@@ -163,6 +163,7 @@ def to_settings_response(settings: AppSettings) -> SettingsResponse:
 
 def should_video_generate_with_ltx_api(*, force_api_generations: bool, settings: AppSettings) -> bool:
     has_ltx_api_key = bool(settings.ltx_api_key.strip())
-    return force_api_generations or (
-        settings.user_prefers_ltx_api_video_generations and has_ltx_api_key
-    )
+    if not has_ltx_api_key:
+        # API key is optional — fall back to local generation if not configured.
+        return False
+    return force_api_generations or settings.user_prefers_ltx_api_video_generations

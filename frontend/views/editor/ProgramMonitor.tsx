@@ -2,7 +2,7 @@ import React from 'react'
 import {
   Layers, Video, ChevronDown,
   ChevronLeft, ChevronRight, Pause, Play, Repeat,
-  Expand, Shrink,
+  Expand, Shrink, Smartphone, Monitor,
 } from 'lucide-react'
 import { Button } from '../../components/ui/button'
 import { Tooltip } from '../../components/ui/tooltip'
@@ -10,8 +10,85 @@ import { AudioWaveform } from '../../components/AudioWaveform'
 import { pathToFileUrl } from '../../lib/file-url'
 import { DEFAULT_SUBTITLE_STYLE } from '../../types/project'
 import type { Asset, TimelineClip, Track, SubtitleClip } from '../../types/project'
-import { getClipEffectStyles, getTransitionBgColor, formatTime, getShortcutLabel, tooltipLabel, getMaskedEffectOverlays } from './video-editor-utils'
+import { getClipEffectStyles, getClipMotionStyles, getTransitionBgColor, formatTime, getShortcutLabel, tooltipLabel, getMaskedEffectOverlays } from './video-editor-utils'
 import type { KeyboardLayout } from '../../lib/keyboard-shortcuts'
+
+function pickPrimaryFontFamily(fontFamily: string): string {
+  const first = fontFamily.split(',')[0].trim().replace(/^['"]|['"]$/g, '')
+  return first || 'Arial'
+}
+
+function estimateCharWidthPx(ch: string, fontSizePx: number): number {
+  if (ch === ' ') return fontSizePx * 0.33
+  if (/[\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]/.test(ch)) return fontSizePx * 1.0
+  if (/[A-Z]/.test(ch)) return fontSizePx * 0.62
+  if (/[a-z0-9]/.test(ch)) return fontSizePx * 0.54
+  if (/[.,;:!?'"`]/.test(ch)) return fontSizePx * 0.30
+  return fontSizePx * 0.55
+}
+
+function estimateTextWidthPx(text: string, fontSizePx: number, letterSpacingPx: number): number {
+  if (!text) return 0
+  let width = 0
+  for (let i = 0; i < text.length; i++) {
+    width += estimateCharWidthPx(text[i], fontSizePx)
+  }
+  width += Math.max(0, text.length - 1) * Math.max(0, letterSpacingPx)
+  return width
+}
+
+function wrapWordToWidth(word: string, maxWidthPx: number, fontSizePx: number, letterSpacingPx: number): string[] {
+  const chunks: string[] = []
+  let current = ''
+  for (const ch of word) {
+    const candidate = current + ch
+    if (current && estimateTextWidthPx(candidate, fontSizePx, letterSpacingPx) > maxWidthPx) {
+      chunks.push(current)
+      current = ch
+    } else {
+      current = candidate
+    }
+  }
+  if (current) chunks.push(current)
+  return chunks
+}
+
+function wrapTextForSafeArea(
+  text: string,
+  maxWidthPx: number,
+  fontSizePx: number,
+  letterSpacingPx: number,
+): string {
+  const paragraphs = text.split(/\r?\n/)
+  const wrappedParagraphs = paragraphs.map(paragraph => {
+    const words = paragraph.trim().split(/\s+/).filter(Boolean)
+    if (words.length === 0) return ''
+
+    const lines: string[] = []
+    let line = ''
+    for (const rawWord of words) {
+      const candidate = line ? `${line} ${rawWord}` : rawWord
+      if (estimateTextWidthPx(candidate, fontSizePx, letterSpacingPx) <= maxWidthPx) {
+        line = candidate
+        continue
+      }
+      if (line) {
+        lines.push(line)
+        line = ''
+      }
+      if (estimateTextWidthPx(rawWord, fontSizePx, letterSpacingPx) <= maxWidthPx) {
+        line = rawWord
+      } else {
+        const chunks = wrapWordToWidth(rawWord, maxWidthPx, fontSizePx, letterSpacingPx)
+        lines.push(...chunks.slice(0, -1))
+        line = chunks[chunks.length - 1] || ''
+      }
+    }
+    if (line) lines.push(line)
+    return lines.join('\n')
+  })
+  return wrappedParagraphs.join('\n')
+}
 import {
   selectActiveTimelineInPoint,
   selectActiveTimelineOutPoint,
@@ -461,10 +538,10 @@ export const ProgramMonitor = React.forwardRef<ProgramMonitorHandle, ProgramMoni
   const videoPoolContainerRef = React.useRef<HTMLDivElement>(null)
   const incomingDissolveVideoRef = React.useRef<HTMLVideoElement | null>(null)
   const incomingDissolveImageRef = React.useRef<HTMLImageElement | null>(null)
-  const activeImageRef = React.useRef<HTMLImageElement | null>(null)
+  const activeImageRef = React.useRef<HTMLElement | null>(null)
   const transitionBgRef = React.useRef<HTMLDivElement | null>(null)
   const videoPoolRef = React.useRef<Map<string, HTMLVideoElement>>(new Map())
-  const compositingMediaRefs = React.useRef<Map<string, HTMLVideoElement | HTMLImageElement>>(new Map())
+  const compositingMediaRefs = React.useRef<Map<string, HTMLElement>>(new Map())
   const activePoolPathRef = React.useRef('')
   const activePoolClipIdRef = React.useRef<string | null>(null)
   const contributorSyncStatesRef = React.useRef<Map<string, VideoContributorSyncState>>(new Map())
@@ -472,6 +549,7 @@ export const ProgramMonitor = React.forwardRef<ProgramMonitorHandle, ProgramMoni
   const clipsRef = React.useRef(clips)
   const tracksRef = React.useRef(tracks)
   const getClipPathRef = React.useRef(getClipPath)
+  const [previewAspectRatio, setPreviewAspectRatio] = React.useState<'16:9' | '9:16'>('16:9')
   const [previewZoom, setPreviewZoom] = React.useState<number | 'fit'>('fit')
   const [previewZoomOpen, setPreviewZoomOpen] = React.useState(false)
   const [previewPan, setPreviewPan] = React.useState({ x: 0, y: 0 })
@@ -480,6 +558,7 @@ export const ProgramMonitor = React.forwardRef<ProgramMonitorHandle, ProgramMoni
   const [playbackResOpen, setPlaybackResOpen] = React.useState(false)
   const [playbackResolution, setPlaybackResolution] = React.useState<1 | 0.5 | 0.25>(0.5)
   const [videoFrameSize, setVideoFrameSize] = React.useState<{ width: number; height: number }>({ width: 0, height: 0 })
+  const videoFrameSizeRef = React.useRef<{ width: number; height: number }>({ width: 0, height: 0 })
   const frameRenderCache = React.useMemo(() => buildFrameRenderCache(clips, subtitles), [clips, subtitles])
   const frameRenderCacheRef = React.useRef(frameRenderCache)
   const [frameScene, setFrameScene] = React.useState<FrameOverlayState>(() => {
@@ -834,6 +913,12 @@ export const ProgramMonitor = React.forwardRef<ProgramMonitorHandle, ProgramMoni
           ? (1 - crossDissolveProgress) * ((crossDissolve.outgoing.opacity ?? 100) / 100)
           : baseStyle.opacity
         applyEffectStyle(poolContainer, baseStyle, typeof outgoingOpacity === 'number' ? outgoingOpacity : undefined)
+        // Apply Ken Burns motion transform for video clips (combined with flip transform)
+        const motionStyle = getClipMotionStyles(outgoingClip, Math.max(0, atTime - outgoingClip.startTime), videoFrameSizeRef.current)
+        if (motionStyle.transform) {
+          const flipTransform = toStyleValue(baseStyle.transform as string | undefined)
+          poolContainer.style.transform = [flipTransform, motionStyle.transform].filter(Boolean).join(' ')
+        }
       } else {
         clearEffectStyle(poolContainer)
         poolContainer.style.opacity = '0'
@@ -1106,7 +1191,7 @@ export const ProgramMonitor = React.forwardRef<ProgramMonitorHandle, ProgramMoni
   React.useEffect(() => {
     const el = previewContainerRef.current
     if (!el) return
-    const PROJECT_RATIO = 16 / 9
+    const PROJECT_RATIO = previewAspectRatio === '9:16' ? 9 / 16 : 16 / 9
     const compute = () => {
       const { width, height } = el.getBoundingClientRect()
       if (width === 0 || height === 0) return
@@ -1119,13 +1204,14 @@ export const ProgramMonitor = React.forwardRef<ProgramMonitorHandle, ProgramMoni
         fw = width
         fh = width / PROJECT_RATIO
       }
+      videoFrameSizeRef.current = { width: fw, height: fh }
       setVideoFrameSize(prev => (prev.width === fw && prev.height === fh ? prev : { width: fw, height: fh }))
     }
     compute()
     const observer = new ResizeObserver(compute)
     observer.observe(el)
     return () => observer.disconnect()
-  }, [])
+  }, [previewAspectRatio])
 
   // Compositing stack video sync is handled inside renderFrame.
 
@@ -1183,10 +1269,10 @@ export const ProgramMonitor = React.forwardRef<ProgramMonitorHandle, ProgramMoni
                 transformOrigin: 'center center',
               } : undefined}
             >
-              {/* Video frame wrapper — black bg with exact 16:9 dimensions */}
+              {/* Video frame wrapper — black bg with exact dimensions */}
               <div
                 className="relative bg-black overflow-hidden"
-                style={videoFrameSize.width > 0 ? { width: videoFrameSize.width, height: videoFrameSize.height } : { width: '100%', aspectRatio: '16/9' }}
+                style={videoFrameSize.width > 0 ? { width: videoFrameSize.width, height: videoFrameSize.height } : { width: '100%', aspectRatio: previewAspectRatio === '9:16' ? '9/16' : '16/9' }}
                 onClick={() => {
                   if (clickedTextOverlayRef.current) {
                     return
@@ -1201,7 +1287,29 @@ export const ProgramMonitor = React.forwardRef<ProgramMonitorHandle, ProgramMoni
                   {compositingStack.map(lowerClip => {
                     const lowerPath = getClipPath(lowerClip) || lowerClip.asset?.path || ''
                     const lowerFileUrl = lowerPath ? pathToFileUrl(lowerPath) : ''
+                    const lowerOffset = Math.max(0, currentTime - lowerClip.startTime)
                     if (lowerClip.asset?.type === 'image' || lowerClip.type === 'image') {
+                      const lowerMotion = getClipMotionStyles(lowerClip, lowerOffset, videoFrameSize)
+                      if (lowerMotion.transform) {
+                        return (
+                          <div
+                            key={`comp-${lowerClip.id}`}
+                            className="absolute inset-0 w-full h-full pointer-events-none z-[1] bg-black overflow-hidden"
+                            ref={(el) => {
+                              if (el) compositingMediaRefs.current.set(lowerClip.id, el)
+                              else compositingMediaRefs.current.delete(lowerClip.id)
+                            }}
+                          >
+                            <div className="absolute inset-0 w-full h-full" style={lowerMotion}>
+                              <img
+                                src={lowerFileUrl}
+                                alt=""
+                                className="w-full h-full object-contain pointer-events-none"
+                              />
+                            </div>
+                          </div>
+                        )
+                      }
                       return (
                         <img
                           key={`comp-${lowerClip.id}`}
@@ -1250,14 +1358,35 @@ export const ProgramMonitor = React.forwardRef<ProgramMonitorHandle, ProgramMoni
                     className="absolute inset-0 w-full h-full pointer-events-none z-[2] hidden"
                   />
 
-                  {activeClip?.asset?.type === 'image' && (
-                    <img
-                      ref={activeImageRef}
-                      src={pathToFileUrl(getClipPath(activeClip) || activeClip.asset.path)}
-                      alt=""
-                      className="absolute inset-0 w-full h-full object-contain z-[2]"
-                    />
-                  )}
+                  {activeClip?.asset?.type === 'image' && (() => {
+                    const src = pathToFileUrl(getClipPath(activeClip) || activeClip.asset.path)
+                    const clipOffset = Math.max(0, currentTime - activeClip.startTime)
+                    const motion = getClipMotionStyles(activeClip, clipOffset, videoFrameSize)
+                    if (motion.transform) {
+                      return (
+                        <div
+                          ref={(el) => { activeImageRef.current = el }}
+                          className="absolute inset-0 w-full h-full pointer-events-none z-[2] bg-black overflow-hidden"
+                        >
+                          <div className="absolute inset-0 w-full h-full" style={motion}>
+                            <img
+                              src={src}
+                              alt=""
+                              className="w-full h-full object-contain"
+                            />
+                          </div>
+                        </div>
+                      )
+                    }
+                    return (
+                      <img
+                        ref={(el) => { activeImageRef.current = el }}
+                        src={src}
+                        alt=""
+                        className="absolute inset-0 w-full h-full object-contain z-[2]"
+                      />
+                    )
+                  })()}
 
                   {/* Cross-dissolve incoming clip overlay */}
                   {crossDissolveState && (() => {
@@ -1368,19 +1497,49 @@ export const ProgramMonitor = React.forwardRef<ProgramMonitorHandle, ProgramMoni
                 )
               })}
 
-              {/* Text overlay clips */}
+              {/* Text overlay clips constrained and wrapped like export-safe layout */}
               {activeTextClips.map(tc => {
                 const ts = tc.textStyle!
                 const isSelected = selectedClipIds.has(tc.id)
+                const frameWidth = videoFrameSize.width > 0 ? videoFrameSize.width : (previewAspectRatio === '9:16' ? 1080 : 1920)
+                const frameHeight = videoFrameSize.height > 0 ? videoFrameSize.height : (previewAspectRatio === '9:16' ? 1920 : 1080)
+                const frameScale = Math.min(frameWidth, frameHeight) / 1080
+                const fontFamily = pickPrimaryFontFamily(ts.fontFamily)
+                const fontSizePx = Math.max(1, Math.round(ts.fontSize * frameScale))
+                const letterSpacingPx = (ts.letterSpacing || 0) * frameScale
+                const letterSpacingCss = Math.abs(letterSpacingPx) > 0.001 ? `${letterSpacingPx.toFixed(2)}px` : undefined
+
+                const safeLeft = frameWidth * 0.15
+                const safeRight = frameWidth * 0.85
+                const safeWidth = Math.max(1, safeRight - safeLeft)
+                const maxWidthRatio = ts.maxWidth > 0 ? Math.max(0.01, Math.min(1, ts.maxWidth / 100)) : 1
+                const wrapWidth = Math.max(1, Math.min(safeWidth, frameWidth * maxWidthRatio))
+                const halfWrap = wrapWidth / 2
+                const unclampedX = (Math.max(0, Math.min(100, ts.positionX)) / 100) * frameWidth
+                const minX = safeLeft + halfWrap
+                const maxX = safeRight - halfWrap
+                const clampedX = minX <= maxX
+                  ? Math.max(minX, Math.min(maxX, unclampedX))
+                  : (safeLeft + safeRight) / 2
+                const clampedXPct = (clampedX / frameWidth) * 100
+
+                const wrappedText = wrapTextForSafeArea(
+                  ts.text,
+                  wrapWidth,
+                  fontSizePx,
+                  Math.max(0, letterSpacingPx),
+                )
+
                 return (
                   <div
                     key={`text-${tc.id}`}
                     className={`absolute z-[24] ${isSelected ? 'ring-2 ring-cyan-400/60 ring-offset-1 ring-offset-transparent' : ''}`}
                     style={{
-                      left: `${ts.positionX}%`,
+                      left: `${clampedXPct}%`,
                       top: `${ts.positionY}%`,
                       transform: 'translate(-50%, -50%)',
-                      maxWidth: ts.maxWidth > 0 ? `${ts.maxWidth}%` : undefined,
+                      width: `${wrapWidth}px`,
+                      maxWidth: `${wrapWidth}px`,
                       opacity: ts.opacity / 100,
                       pointerEvents: 'auto',
                       cursor: 'move',
@@ -1389,22 +1548,31 @@ export const ProgramMonitor = React.forwardRef<ProgramMonitorHandle, ProgramMoni
                       e.stopPropagation()
                       clickedTextOverlayRef.current = true
                       selectClip(tc.id)
-                      // Capture panel state at mousedown time so we can restore it after any
-                      // spurious onClick handlers that might close it
                       const wasOpen = showPropertiesPanel
                       const clipId = tc.id
                       const container = (e.currentTarget.parentElement as HTMLElement)
                       if (!container) return
                       const rect = container.getBoundingClientRect()
                       const onMove = (ev: MouseEvent) => {
-                        const px = Math.max(0, Math.min(100, ((ev.clientX - rect.left) / rect.width) * 100))
+                        const currentSafeLeft = rect.width * 0.15
+                        const currentSafeRight = rect.width * 0.85
+                        const currentSafeWidth = Math.max(1, currentSafeRight - currentSafeLeft)
+                        const currentMaxWidthRatio = ts.maxWidth > 0 ? Math.max(0.01, Math.min(1, ts.maxWidth / 100)) : 1
+                        const currentWrapWidth = Math.max(1, Math.min(currentSafeWidth, rect.width * currentMaxWidthRatio))
+                        const currentHalfWrap = currentWrapWidth / 2
+                        const currentMinX = currentSafeLeft + currentHalfWrap
+                        const currentMaxX = currentSafeRight - currentHalfWrap
+                        const rawX = ev.clientX - rect.left
+                        const clampedXpx = currentMinX <= currentMaxX
+                          ? Math.max(currentMinX, Math.min(currentMaxX, rawX))
+                          : (currentSafeLeft + currentSafeRight) / 2
+                        const px = (clampedXpx / rect.width) * 100
                         const py = Math.max(0, Math.min(100, ((ev.clientY - rect.top) / rect.height) * 100))
                         setClipTextPosition(tc.id, px, py)
                       }
                       const onUp = () => {
                         window.removeEventListener('mousemove', onMove)
                         window.removeEventListener('mouseup', onUp)
-                        // Reset the ref and restore state after all click events have fired
                         requestAnimationFrame(() => {
                           clickedTextOverlayRef.current = false
                           selectClip(clipId)
@@ -1423,29 +1591,29 @@ export const ProgramMonitor = React.forwardRef<ProgramMonitorHandle, ProgramMoni
                   >
                     <div
                       style={{
-                        fontFamily: ts.fontFamily,
-                        fontSize: `${ts.fontSize * 0.05}vh`,
+                        fontFamily,
+                        fontSize: `${fontSizePx}px`,
                         fontWeight: ts.fontWeight,
                         fontStyle: ts.fontStyle,
                         color: ts.color,
                         backgroundColor: ts.backgroundColor,
                         textAlign: ts.textAlign,
-                        padding: ts.padding > 0 ? `${ts.padding * 0.04}vh` : undefined,
-                        borderRadius: ts.borderRadius > 0 ? `${ts.borderRadius}px` : undefined,
-                        letterSpacing: ts.letterSpacing !== 0 ? `${ts.letterSpacing}px` : undefined,
+                        padding: ts.padding > 0 ? `${Math.max(0, ts.padding * frameScale)}px` : undefined,
+                        borderRadius: ts.borderRadius > 0 ? `${Math.max(0, ts.borderRadius * frameScale)}px` : undefined,
+                        letterSpacing: letterSpacingCss,
                         lineHeight: ts.lineHeight,
                         textShadow: ts.shadowBlur > 0 || ts.shadowOffsetX !== 0 || ts.shadowOffsetY !== 0
-                          ? `${ts.shadowOffsetX}px ${ts.shadowOffsetY}px ${ts.shadowBlur}px ${ts.shadowColor}`
+                          ? `${ts.shadowOffsetX * frameScale}px ${ts.shadowOffsetY * frameScale}px ${ts.shadowBlur * frameScale}px ${ts.shadowColor}`
                           : undefined,
                         WebkitTextStroke: ts.strokeWidth > 0 && ts.strokeColor !== 'transparent'
-                          ? `${ts.strokeWidth}px ${ts.strokeColor}`
+                          ? `${ts.strokeWidth * frameScale}px ${ts.strokeColor}`
                           : undefined,
                         whiteSpace: 'pre-wrap',
                         wordBreak: 'break-word',
                         userSelect: 'none',
                       }}
                     >
-                      {ts.text}
+                      {wrappedText}
                     </div>
                   </div>
                 )
@@ -1468,7 +1636,7 @@ export const ProgramMonitor = React.forwardRef<ProgramMonitorHandle, ProgramMoni
                         <span
                           className="inline-block max-w-[90%] text-center mx-auto rounded px-3 py-1.5 leading-snug whitespace-pre-wrap"
                           style={{
-                            fontSize: `${style.fontSize}px`,
+                            fontSize: `${Math.round(Math.min(videoFrameSize.width, videoFrameSize.height) * (videoFrameSize.height > videoFrameSize.width ? 0.08 : 0.05))}px`,
                             fontFamily: style.fontFamily,
                             fontWeight: style.fontWeight,
                             fontStyle: style.italic ? 'italic' : 'normal',
@@ -1477,7 +1645,27 @@ export const ProgramMonitor = React.forwardRef<ProgramMonitorHandle, ProgramMoni
                             textShadow: '1px 1px 3px rgba(0,0,0,0.8)',
                           }}
                         >
-                          {sub.text}
+                          {style.highlightEnabled ? (() => {
+                            const segments = sub.text.split(/(\s+)/)
+                            const nonSpaceWords = segments.filter(w => w.trim())
+                            const totalChars = nonSpaceWords.reduce((sum, w) => sum + w.length, 0)
+                            const progress = totalChars > 0 ? Math.max(0, Math.min(1, (currentTime - sub.startTime) / (sub.endTime - sub.startTime))) : 0
+                            const highlightedChars = progress * totalChars
+                            let charsSoFar = 0
+                            return segments.map((segment, i) => {
+                              if (!segment.trim()) return segment
+                              const wordStart = charsSoFar
+                              charsSoFar += segment.length
+                              const isHighlighted = wordStart < highlightedChars
+                              return (
+                                <span key={i} style={{
+                                  color: isHighlighted ? (style.highlightColor || '#FFDD00') : style.color,
+                                  opacity: isHighlighted ? 1 : 0.4,
+                                  transition: 'color 0.1s, opacity 0.1s',
+                                }}>{segment}</span>
+                              )
+                            })
+                          })() : sub.text}
                         </span>
                       </div>
                     )
@@ -1874,6 +2062,24 @@ export const ProgramMonitor = React.forwardRef<ProgramMonitorHandle, ProgramMoni
               </div>
             )}
           </div>
+
+          {/* Aspect Ratio Toggle */}
+          <Tooltip content={previewAspectRatio === '16:9' ? 'Switch to Vertical (9:16)' : 'Switch to Horizontal (16:9)'} side="top">
+            <button
+              onClick={() => setPreviewAspectRatio(prev => prev === '16:9' ? '9:16' : '16:9')}
+              className={`h-6 px-2 rounded text-[11px] font-medium flex items-center gap-1 transition-colors border ${
+                previewAspectRatio === '9:16'
+                  ? 'bg-purple-900/30 text-purple-400 border-purple-700/50 hover:border-purple-600'
+                  : 'bg-zinc-900 text-zinc-400 border-zinc-700 hover:border-zinc-600'
+              }`}
+              title="Preview aspect ratio"
+            >
+              {previewAspectRatio === '9:16'
+                ? <><Smartphone className="h-3 w-3" /> 9:16</>
+                : <><Monitor className="h-3 w-3" /> 16:9</>
+              }
+            </button>
+          </Tooltip>
 
           {/* Fullscreen */}
           <Tooltip content={isFullscreen ? tooltipLabel('Exit fullscreen', getShortcutLabel(kbLayout, 'view.fullscreen')) : tooltipLabel('Fullscreen', getShortcutLabel(kbLayout, 'view.fullscreen'))} side="top">

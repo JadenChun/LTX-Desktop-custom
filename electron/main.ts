@@ -1,5 +1,7 @@
 import './app-paths'
 import { app } from 'electron'
+import fs from 'fs'
+import path from 'path'
 import { setupCSP } from './csp'
 import { registerExportHandlers } from './export/export-handler'
 import { stopExportProcess } from './export/ffmpeg-utils'
@@ -54,6 +56,12 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     setupCSP()
+    // Ensure outputs directory exists for imported media files
+    const outputsDir = path.join(process.cwd(), 'outputs')
+    if (!fs.existsSync(outputsDir)) {
+      fs.mkdirSync(outputsDir, { recursive: true })
+      console.log('[LTX Desktop] Created outputs directory:', outputsDir)
+    }
     createWindow()
     initAutoUpdater()
     // Python setup + backend start are now driven by the renderer via IPC

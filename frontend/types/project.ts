@@ -76,16 +76,20 @@ export interface SubtitleStyle {
   backgroundColor: string  // hex color with alpha, default '#00000099'
   position: 'bottom' | 'top' | 'center'  // vertical position, default 'bottom'
   italic: boolean
+  highlightEnabled: boolean   // progressive word-by-word highlight (karaoke-style), default false
+  highlightColor: string      // hex color for highlighted words, default '#FFDD00'
 }
 
 export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
-  fontSize: 32,
+  fontSize: 28,
   fontFamily: 'sans-serif',
   fontWeight: 'normal',
   color: '#FFFFFF',
   backgroundColor: 'transparent',
   position: 'bottom',
   italic: false,
+  highlightEnabled: false,
+  highlightColor: '#FFDD00',
 }
 
 // A single subtitle cue on the timeline
@@ -341,6 +345,44 @@ export const DEFAULT_TEXT_STYLE: TextOverlayStyle = {
   opacity: 100,
 }
 
+export interface KenBurnsKeyframe {
+  scale: number
+  focusX: number // 0–100 (% of frame width), 50 = center
+  focusY: number // 0–100 (% of frame height), 50 = center
+}
+
+export interface KenBurnsMotion {
+  type: 'ken_burns'
+  start: KenBurnsKeyframe
+  end: KenBurnsKeyframe
+  easing?: 'linear' | 'easeInOut'
+}
+
+export type ClipMotion = KenBurnsMotion
+
+// Highlight overlay style (translucent rectangle that scrolls across the video)
+export interface HighlightStyle {
+  startX: number      // start X center (% of frame, 0-100)
+  startY: number      // start Y center (% of frame, 0-100)
+  endX: number        // end X center (% of frame, 0-100)
+  endY: number        // end Y center (% of frame, 0-100)
+  width: number       // width (% of frame, 0-100)
+  height: number      // height (% of frame, 0-100)
+  color: string       // CSS color with alpha, e.g. 'rgba(255,221,0,0.3)'
+  borderRadius: number // corner radius in px
+}
+
+export const DEFAULT_HIGHLIGHT_STYLE: HighlightStyle = {
+  startX: 10,
+  startY: 50,
+  endX: 90,
+  endY: 50,
+  width: 15,
+  height: 6,
+  color: 'rgba(255,221,0,0.3)',
+  borderRadius: 4,
+}
+
 // Text overlay preset templates
 export interface TextPreset {
   id: string
@@ -362,7 +404,7 @@ export const TEXT_PRESETS: TextPreset[] = [
 export interface TimelineClip {
   id: string
   assetId: string | null
-  type: 'video' | 'image' | 'audio' | 'adjustment' | 'text'
+  type: 'video' | 'image' | 'audio' | 'adjustment' | 'text' | 'highlight'
   startTime: number
   duration: number
   trimStart: number
@@ -393,6 +435,10 @@ export interface TimelineClip {
   letterbox?: LetterboxSettings
   // Text overlay
   textStyle?: TextOverlayStyle
+  // Highlight overlay (scrolling translucent rectangle)
+  highlightStyle?: HighlightStyle
+  // Motion effects (pan/zoom)
+  motion?: ClipMotion
 }
 
 export interface Timeline {
@@ -412,6 +458,12 @@ export interface Project {
   assets: Asset[]
   timelines: Timeline[]
   activeTimelineId?: string
+  // When present, indicates this project is synced from the MCP project store.
+  // Used to detect backend updates even if the local project has been edited.
+  mcpLastUpdatedAt?: number
+  // When present, indicates this project is a local backup created before overwriting from MCP sync.
+  // Used to merge the backup back into the MCP project.
+  backupOfProjectId?: string
 }
 
 export type ViewType = 'home' | 'project'
@@ -419,10 +471,10 @@ export type ProjectTab = 'gen-space' | 'video-editor'
 
 // Default tracks for new timelines
 export const DEFAULT_TRACKS: Track[] = [
-  { id: 'track-v1', name: 'V1', muted: false, locked: false, sourcePatched: true,  kind: 'video' },
+  { id: 'track-v1', name: 'V1', muted: false, locked: false, sourcePatched: true, kind: 'video' },
   { id: 'track-v2', name: 'V2', muted: false, locked: false, sourcePatched: false, kind: 'video' },
   { id: 'track-v3', name: 'V3', muted: false, locked: false, sourcePatched: false, kind: 'video' },
-  { id: 'track-a1', name: 'A1', muted: false, locked: false, sourcePatched: true,  kind: 'audio' },
+  { id: 'track-a1', name: 'A1', muted: false, locked: false, sourcePatched: true, kind: 'audio' },
   { id: 'track-a2', name: 'A2', muted: false, locked: false, sourcePatched: false, kind: 'audio' },
 ]
 
