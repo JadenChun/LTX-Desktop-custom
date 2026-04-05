@@ -25,7 +25,9 @@ export interface GenerationParams {
 
 // A single "take" (version) of a generated asset
 export interface AssetTake {
+  url?: string
   path: string
+  thumbnail?: string
   bigThumbnailPath?: string
   smallThumbnailPath?: string
   width?: number
@@ -37,6 +39,8 @@ export interface Asset {
   id: string
   type: 'image' | 'video' | 'audio' | 'adjustment'
   path: string
+  url?: string
+  thumbnail?: string
   bigThumbnailPath?: string
   smallThumbnailPath?: string
   width?: number
@@ -51,7 +55,7 @@ export interface Asset {
   generationParams?: GenerationParams
   takes?: AssetTake[] // All takes (index 0 = original). If undefined, the asset itself is the only take.
   activeTakeIndex?: number // Which take is currently active (default = 0 / latest)
-  colorLabel?: string // Color label for organization (e.g. 'violet', 'blue', 'green', 'yellow', 'red', 'rose', 'orange', 'mango')
+  colorLabel?: string // Color label for organization
 }
 
 export interface Track {
@@ -59,25 +63,25 @@ export interface Track {
   name: string
   muted: boolean
   locked: boolean
-  solo?: boolean                 // Audio solo: when any track is soloed, only soloed tracks produce audio
-  enabled?: boolean              // Track output toggle: false = clips on this track hidden in preview (default true)
-  sourcePatched?: boolean        // Source/record patch: false = insert/overwrite edits skip this track (default true)
-  type?: 'default' | 'subtitle'  // default = media track, subtitle = subtitle track
-  kind?: 'video' | 'audio'      // NLE track kind for display ordering (video tracks stack up, audio down)
-  subtitleStyle?: Partial<SubtitleStyle>  // Global style for all subtitles on this track (overrides DEFAULT, overridden by per-sub style)
+  solo?: boolean // Audio solo: when any track is soloed, only soloed tracks produce audio
+  enabled?: boolean // Track output toggle: false = clips on this track hidden in preview (default true)
+  sourcePatched?: boolean // Source/record patch: false = insert/overwrite edits skip this track (default true)
+  type?: 'default' | 'subtitle' // default = media track, subtitle = subtitle track
+  kind?: 'video' | 'audio' // NLE track kind for display ordering
+  subtitleStyle?: Partial<SubtitleStyle> // Global style for all subtitles on this track
 }
 
 // Subtitle styling options
 export interface SubtitleStyle {
-  fontSize: number         // in px, default 32
-  fontFamily: string       // default 'sans-serif'
+  fontSize: number // in px, default 32
+  fontFamily: string // default 'sans-serif'
   fontWeight: 'normal' | 'bold'
-  color: string            // hex color, default '#FFFFFF'
-  backgroundColor: string  // hex color with alpha, default '#00000099'
-  position: 'bottom' | 'top' | 'center'  // vertical position, default 'bottom'
+  color: string // hex color, default '#FFFFFF'
+  backgroundColor: string // hex color with alpha, default '#00000099'
+  position: 'bottom' | 'top' | 'center' // vertical position, default 'bottom'
   italic: boolean
-  highlightEnabled: boolean   // progressive word-by-word highlight (karaoke-style), default false
-  highlightColor: string      // hex color for highlighted words, default '#FFDD00'
+  highlightEnabled: boolean // progressive word-by-word highlight
+  highlightColor: string // hex color for highlighted words
 }
 
 export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
@@ -102,7 +106,15 @@ export interface SubtitleClip {
   style?: Partial<SubtitleStyle>
 }
 
-export type TransitionType = 'none' | 'dissolve' | 'fade-to-black' | 'fade-to-white' | 'wipe-left' | 'wipe-right' | 'wipe-up' | 'wipe-down'
+export type TransitionType =
+  | 'none'
+  | 'dissolve'
+  | 'fade-to-black'
+  | 'fade-to-white'
+  | 'wipe-left'
+  | 'wipe-right'
+  | 'wipe-up'
+  | 'wipe-down'
 
 export interface ClipTransition {
   type: TransitionType
@@ -110,14 +122,14 @@ export interface ClipTransition {
 }
 
 export interface ColorCorrection {
-  brightness: number   // -100 to 100, default 0
-  contrast: number     // -100 to 100, default 0
-  saturation: number   // -100 to 100, default 0
-  temperature: number  // -100 to 100, default 0 (negative = cooler/blue, positive = warmer/orange)
-  tint: number         // -100 to 100, default 0 (negative = green, positive = magenta)
-  exposure: number     // -100 to 100, default 0
-  highlights: number   // -100 to 100, default 0
-  shadows: number      // -100 to 100, default 0
+  brightness: number // -100 to 100, default 0
+  contrast: number // -100 to 100, default 0
+  saturation: number // -100 to 100, default 0
+  temperature: number // -100 to 100, default 0
+  tint: number // -100 to 100, default 0
+  exposure: number // -100 to 100, default 0
+  highlights: number // -100 to 100, default 0
+  shadows: number // -100 to 100, default 0
 }
 
 export const DEFAULT_COLOR_CORRECTION: ColorCorrection = {
@@ -135,9 +147,9 @@ export const DEFAULT_COLOR_CORRECTION: ColorCorrection = {
 export interface LetterboxSettings {
   enabled: boolean
   aspectRatio: '2.35:1' | '2.39:1' | '2.76:1' | '1.85:1' | '4:3' | 'custom'
-  customRatio?: number  // width / height, used when aspectRatio === 'custom'
-  color: string          // default '#000000'
-  opacity: number        // 0-100, default 100
+  customRatio?: number // width / height, used when aspectRatio === 'custom'
+  color: string // default '#000000'
+  opacity: number // 0-100, default 100
 }
 
 export const DEFAULT_LETTERBOX: LetterboxSettings = {
@@ -150,20 +162,30 @@ export const DEFAULT_LETTERBOX: LetterboxSettings = {
 // --- Effects System ---
 
 export type EffectType =
-  | 'blur' | 'sharpen' | 'glow' | 'vignette' | 'grain'
-  | 'lut-cinematic' | 'lut-vintage' | 'lut-bw' | 'lut-cool' | 'lut-warm' | 'lut-muted' | 'lut-vivid'
+  | 'blur'
+  | 'sharpen'
+  | 'glow'
+  | 'vignette'
+  | 'grain'
+  | 'lut-cinematic'
+  | 'lut-vintage'
+  | 'lut-bw'
+  | 'lut-cool'
+  | 'lut-warm'
+  | 'lut-muted'
+  | 'lut-vivid'
 
 export type EffectMaskShape = 'rectangle' | 'ellipse'
 
 export interface EffectMask {
   enabled: boolean
   shape: EffectMaskShape
-  x: number      // center X as % of frame (0-100)
-  y: number      // center Y as % of frame (0-100)
-  width: number   // width as % of frame (0-100)
-  height: number  // height as % of frame (0-100)
+  x: number // center X as % of frame (0-100)
+  y: number // center Y as % of frame (0-100)
+  width: number // width as % of frame (0-100)
+  height: number // height as % of frame (0-100)
   feather: number // edge softness in px (0-100)
-  invert: boolean // if true, effect applies OUTSIDE the mask
+  invert: boolean // if true, effect applies outside the mask
   rotation: number // rotation in degrees
 }
 
@@ -203,21 +225,21 @@ export interface EffectDefinition {
 }
 
 export const EFFECT_DEFINITIONS: Record<EffectType, EffectDefinition> = {
-  'blur': {
+  blur: {
     name: 'Gaussian Blur',
     category: 'filter',
     icon: 'Droplets',
     defaultParams: { amount: 5 },
     paramRanges: { amount: { min: 0, max: 50, step: 0.5, label: 'Radius' } },
   },
-  'sharpen': {
+  sharpen: {
     name: 'Sharpen',
     category: 'filter',
     icon: 'Diamond',
     defaultParams: { amount: 50 },
     paramRanges: { amount: { min: 0, max: 100, step: 1, label: 'Amount' } },
   },
-  'glow': {
+  glow: {
     name: 'Glow',
     category: 'stylize',
     icon: 'Sun',
@@ -227,14 +249,14 @@ export const EFFECT_DEFINITIONS: Record<EffectType, EffectDefinition> = {
       radius: { min: 0, max: 50, step: 1, label: 'Radius' },
     },
   },
-  'vignette': {
+  vignette: {
     name: 'Vignette',
     category: 'stylize',
     icon: 'Circle',
     defaultParams: { amount: 50 },
     paramRanges: { amount: { min: 0, max: 100, step: 1, label: 'Amount' } },
   },
-  'grain': {
+  grain: {
     name: 'Film Grain',
     category: 'stylize',
     icon: 'Scan',
@@ -295,29 +317,38 @@ export const EFFECT_DEFINITIONS: Record<EffectType, EffectDefinition> = {
 // Text overlay styling
 export interface TextOverlayStyle {
   text: string
-  fontFamily: string       // e.g. 'Inter', 'Arial', 'Georgia'
-  fontSize: number         // in px, relative to 1080p canvas
-  fontWeight: 'normal' | 'bold' | '100' | '200' | '300' | '400' | '500' | '600' | '700' | '800' | '900'
+  fontFamily: string // e.g. 'Inter', 'Arial', 'Georgia'
+  fontSize: number // in px, relative to 1080p canvas
+  fontWeight:
+    | 'normal'
+    | 'bold'
+    | '100'
+    | '200'
+    | '300'
+    | '400'
+    | '500'
+    | '600'
+    | '700'
+    | '800'
+    | '900'
   fontStyle: 'normal' | 'italic'
-  color: string            // hex color
-  backgroundColor: string  // hex + alpha, 'transparent' for none
+  color: string // hex color
+  backgroundColor: string // hex + alpha, 'transparent' for none
   textAlign: 'left' | 'center' | 'right'
-  // Position as percentage of frame (0-100)
-  positionX: number        // 50 = centered horizontally
-  positionY: number        // 50 = centered vertically
-  // Optional styling
-  strokeColor: string      // outline color, 'transparent' for none
-  strokeWidth: number      // outline width in px
-  shadowColor: string      // text shadow
+  positionX: number // 50 = centered horizontally
+  positionY: number // 50 = centered vertically
+  strokeColor: string // outline color, 'transparent' for none
+  strokeWidth: number // outline width in px
+  shadowColor: string // text shadow
   shadowBlur: number
   shadowOffsetX: number
   shadowOffsetY: number
-  letterSpacing: number    // in px
-  lineHeight: number       // multiplier, e.g. 1.2
-  maxWidth: number         // max width as percentage of frame (0-100), 0 = no limit
-  padding: number          // padding inside background in px
-  borderRadius: number     // for background box
-  opacity: number          // 0-100
+  letterSpacing: number // in px
+  lineHeight: number // multiplier, e.g. 1.2
+  maxWidth: number // max width as percentage of frame (0-100), 0 = no limit
+  padding: number // padding inside background in px
+  borderRadius: number // for background box
+  opacity: number // 0-100
 }
 
 export const DEFAULT_TEXT_STYLE: TextOverlayStyle = {
@@ -347,8 +378,8 @@ export const DEFAULT_TEXT_STYLE: TextOverlayStyle = {
 
 export interface KenBurnsKeyframe {
   scale: number
-  focusX: number // 0–100 (% of frame width), 50 = center
-  focusY: number // 0–100 (% of frame height), 50 = center
+  focusX: number // 0-100 (% of frame width), 50 = center
+  focusY: number // 0-100 (% of frame height), 50 = center
 }
 
 export interface KenBurnsMotion {
@@ -362,13 +393,13 @@ export type ClipMotion = KenBurnsMotion
 
 // Highlight overlay style (translucent rectangle that scrolls across the video)
 export interface HighlightStyle {
-  startX: number      // start X center (% of frame, 0-100)
-  startY: number      // start Y center (% of frame, 0-100)
-  endX: number        // end X center (% of frame, 0-100)
-  endY: number        // end Y center (% of frame, 0-100)
-  width: number       // width (% of frame, 0-100)
-  height: number      // height (% of frame, 0-100)
-  color: string       // CSS color with alpha, e.g. 'rgba(255,221,0,0.3)'
+  startX: number // start X center (% of frame, 0-100)
+  startY: number // start Y center (% of frame, 0-100)
+  endX: number // end X center (% of frame, 0-100)
+  endY: number // end Y center (% of frame, 0-100)
+  width: number // width (% of frame, 0-100)
+  height: number // height (% of frame, 0-100)
+  color: string // CSS color with alpha, e.g. 'rgba(255,221,0,0.3)'
   borderRadius: number // corner radius in px
 }
 
@@ -415,6 +446,7 @@ export interface TimelineClip {
   volume: number
   trackIndex: number
   asset: Asset | null
+  importedUrl?: string
   importedName?: string
   // Effects
   flipH: boolean
@@ -427,17 +459,17 @@ export interface TimelineClip {
   opacity: number // 0 to 100, default 100
   // Take management
   takeIndex?: number // Which take to show (overrides asset.activeTakeIndex). undefined = use latest.
-  isRegenerating?: boolean // Visual flag: true while a regeneration is in progress for this clip
+  isRegenerating?: boolean // Visual flag while a regeneration is in progress for this clip
   // Linked audio/video
-  linkedClipIds?: string[] // If set, this clip is linked to other clips (e.g. video ↔ audio pairs). Moving/deleting one affects all linked clips.
-  colorLabel?: string // Color label override (if set, uses this; otherwise inherits from asset)
+  linkedClipIds?: string[] // If set, this clip is linked to other clips
+  colorLabel?: string // Color label override
   // Applied effects (blur, sharpen, LUTs, etc.)
   effects?: ClipEffect[]
   // Adjustment layer effects
   letterbox?: LetterboxSettings
   // Text overlay
   textStyle?: TextOverlayStyle
-  // Highlight overlay (scrolling translucent rectangle)
+  // Highlight overlay
   highlightStyle?: HighlightStyle
   // Motion effects (pan/zoom)
   motion?: ClipMotion
@@ -449,7 +481,7 @@ export interface Timeline {
   createdAt: number
   tracks: Track[]
   clips: TimelineClip[]
-  subtitles?: SubtitleClip[]  // Subtitle cues on subtitle tracks
+  subtitles?: SubtitleClip[] // Subtitle cues on subtitle tracks
 }
 
 export interface Project {
@@ -458,17 +490,16 @@ export interface Project {
   createdAt: number
   updatedAt: number
   assets: Asset[]
+  thumbnail?: string
   timelines: Timeline[]
   activeTimelineId?: string
   // When present, indicates this project is synced from the MCP project store.
-  // Used to detect backend updates even if the local project has been edited.
   mcpLastUpdatedAt?: number
   // When present, indicates this project is a local backup created before overwriting from MCP sync.
-  // Used to merge the backup back into the MCP project.
   backupOfProjectId?: string
 }
 
-export type ViewType = 'home' | 'project'
+export type ViewType = 'home' | 'project' | 'playground'
 export type ProjectTab = 'gen-space' | 'video-editor'
 
 // Default tracks for new timelines

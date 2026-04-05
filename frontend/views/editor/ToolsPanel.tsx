@@ -1,5 +1,5 @@
 import React from 'react'
-import { Magnet, Type } from 'lucide-react'
+import { Magnet, Type, Highlighter } from 'lucide-react'
 import { PRIMARY_TOOLS, TRIM_TOOLS, ToolType } from './video-editor-utils'
 import { getShortcutLabel, type KeyboardLayout } from './video-editor-utils'
 import { Tooltip } from '@/components/ui/tooltip'
@@ -18,6 +18,7 @@ interface ToolsPanelProps {
   showEffectsBrowser: boolean
   setShowEffectsBrowser: (v: boolean) => void
   addTextClip: () => void
+  addHighlightClip: () => void
   kbLayout: KeyboardLayout
 }
 
@@ -28,7 +29,7 @@ export function ToolsPanel({
   trimFlyoutOpenedRef, trimLongPressRef,
   snapEnabled, setSnapEnabled,
   showEffectsBrowser: _showEffectsBrowser, setShowEffectsBrowser: _setShowEffectsBrowser, // EFFECTS HIDDEN
-  addTextClip, kbLayout,
+  addTextClip, addHighlightClip, kbLayout,
 }: ToolsPanelProps) {
   return (
     <div className="w-10 flex-shrink-0 bg-zinc-900 border-r border-zinc-800 flex flex-col items-center py-1 gap-0.5 overflow-y-auto">
@@ -176,6 +177,15 @@ export function ToolsPanel({
           className="p-1.5 rounded-lg transition-colors flex-shrink-0 text-cyan-400 hover:bg-cyan-900/30 hover:text-cyan-300"
         >
           <Type className="h-4 w-4" />
+        </button>
+      </Tooltip>
+
+      <Tooltip side="right" content="Add Highlight Overlay">
+        <button
+          onClick={() => addHighlightClip()}
+          className="p-1.5 rounded-lg transition-colors flex-shrink-0 text-yellow-400 hover:bg-yellow-900/30 hover:text-yellow-300"
+        >
+          <Highlighter className="h-4 w-4" />
         </button>
       </Tooltip>
     </div>

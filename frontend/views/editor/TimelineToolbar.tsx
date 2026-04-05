@@ -31,6 +31,20 @@ export function TimelineToolbar({
   tracks, subtitleFileInputRef, handleImportSrt, handleExportSrt, subtitles,
   zoom, setZoom, getMinZoom, centerOnPlayheadRef, handleFitToView,
 }: TimelineToolbarProps) {
+  const presetSpeeds = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 4]
+  const hasCustomSelectedSpeed = selectedClip ? !presetSpeeds.includes(selectedClip.speed) : false
+
+  const applySpeedToClip = (clip: TimelineClip, requestedSpeed: number) => {
+    if (!Number.isFinite(requestedSpeed) || requestedSpeed < 0.25) return
+    const newSpeed = Math.min(requestedSpeed, 100)
+    const oldSpeed = clip.speed
+    let newDuration = clip.duration * (oldSpeed / newSpeed)
+    const maxDur = getMaxClipDuration({ ...clip, speed: newSpeed })
+    newDuration = Math.min(newDuration, maxDur)
+    newDuration = Math.max(0.5, newDuration)
+    updateClip(clip.id, { speed: newSpeed, duration: newDuration })
+  }
+
   return (
     <div className="h-9 bg-zinc-900 border-t border-zinc-800 flex items-center px-3 gap-2 flex-shrink-0">
       <Button variant="outline" size="sm" className="h-6 border-zinc-700 text-zinc-400 text-[10px] px-2">
@@ -46,25 +60,29 @@ export function TimelineToolbar({
             <select
               value={selectedClip.speed}
               onChange={(e) => {
-                const newSpeed = parseFloat(e.target.value)
-                const oldSpeed = selectedClip.speed
-                let newDuration = selectedClip.duration * (oldSpeed / newSpeed)
-                const maxDur = getMaxClipDuration({ ...selectedClip, speed: newSpeed })
-                newDuration = Math.min(newDuration, maxDur)
-                newDuration = Math.max(0.5, newDuration)
-                updateClip(selectedClip.id, { speed: newSpeed, duration: newDuration })
+                applySpeedToClip(selectedClip, parseFloat(e.target.value))
               }}
               className="bg-zinc-800 border border-zinc-700 rounded px-1.5 py-0.5 text-[10px] text-white"
             >
-              <option value={0.25}>0.25x</option>
-              <option value={0.5}>0.5x</option>
-              <option value={0.75}>0.75x</option>
-              <option value={1}>1x</option>
-              <option value={1.25}>1.25x</option>
-              <option value={1.5}>1.5x</option>
-              <option value={2}>2x</option>
-              <option value={4}>4x</option>
+              {hasCustomSelectedSpeed && (
+                <option value={selectedClip.speed}>{selectedClip.speed}x (Custom)</option>
+              )}
+              {presetSpeeds.map((speed) => (
+                <option key={speed} value={speed}>{speed}x</option>
+              ))}
             </select>
+            <input
+              type="number"
+              min={0.25}
+              max={100}
+              step={0.25}
+              value={selectedClip.speed}
+              onChange={(e) => {
+                applySpeedToClip(selectedClip, parseFloat(e.target.value))
+              }}
+              className="w-14 bg-zinc-800 border border-zinc-700 rounded px-1.5 py-0.5 text-[10px] text-white text-right [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+              title="Custom clip speed"
+            />
           </div>
         </>
       )}
