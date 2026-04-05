@@ -421,6 +421,8 @@ export interface TimelineClip {
   flipV: boolean
   transitionIn: ClipTransition
   transitionOut: ClipTransition
+  audioFadeInDuration?: number
+  audioFadeOutDuration?: number
   colorCorrection: ColorCorrection
   opacity: number // 0 to 100, default 100
   // Take management

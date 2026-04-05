@@ -56,6 +56,10 @@ export interface ExportClipData {
   trackIndex: number
   muted: boolean
   volume: number
+  transitionIn?: { type: string; duration: number }
+  transitionOut?: { type: string; duration: number }
+  audioFadeInDuration?: number
+  audioFadeOutDuration?: number
 }
 
 export interface ExportSubtitleData {
@@ -775,6 +779,10 @@ export function selectExportClipData(state: EditorState): ExportClipData[] {
       trackIndex: clip.trackIndex,
       muted: clip.muted || false,
       volume: clip.volume ?? 1,
+      transitionIn: clip.transitionIn,
+      transitionOut: clip.transitionOut,
+      audioFadeInDuration: clip.audioFadeInDuration ?? 0,
+      audioFadeOutDuration: clip.audioFadeOutDuration ?? 0,
     }))
 }
 

@@ -180,7 +180,12 @@ export function registerFileHandlers(): void {
     shell.showItemInFolder(filePath)
   })
 
-  handle('approvePaths', async ({ filePaths }) => {
+  handle('approvePaths', async (input) => {
+    const filePaths = Array.isArray(input)
+      ? input
+      : Array.isArray(input?.filePaths)
+        ? input.filePaths
+        : []
     for (const fp of filePaths) {
       if (fp) approvePath(fp)
     }

@@ -56,6 +56,9 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 RELEASE_DIR="$PROJECT_DIR/release"
+BACKEND_DIR="$PROJECT_DIR/backend"
+HASH_FILE="$PROJECT_DIR/python-deps-hash.txt"
+EMBEDDED_HASH_FILE="$PROJECT_DIR/python-embed/deps-hash.txt"
 
 cd "$PROJECT_DIR"
 
@@ -71,6 +74,22 @@ if [ "$PLATFORM" != "linux" ] && [ ! -d "python-embed" ]; then
   echo "ERROR: Python environment not found. Run local-build.sh or prepare-python.sh first."
   exit 1
 fi
+
+echo "Generating python dependency hash..."
+PYTHON_VERSION="$(tr -d '[:space:]' < "$BACKEND_DIR/.python-version")"
+if command -v sha256sum >/dev/null 2>&1; then
+  LOCK_HASH="$(sha256sum "$BACKEND_DIR/uv.lock" | awk '{print $1}')"
+  DEPS_HASH="$(printf 'platform=%s\npython-version=%s\nuv-lock=%s' "$PLATFORM" "$PYTHON_VERSION" "$LOCK_HASH" | sha256sum | awk '{print $1}')"
+elif command -v shasum >/dev/null 2>&1; then
+  LOCK_HASH="$(shasum -a 256 "$BACKEND_DIR/uv.lock" | awk '{print $1}')"
+  DEPS_HASH="$(printf 'platform=%s\npython-version=%s\nuv-lock=%s' "$PLATFORM" "$PYTHON_VERSION" "$LOCK_HASH" | shasum -a 256 | awk '{print $1}')"
+else
+  echo "ERROR: sha256sum or shasum is required to generate python-deps-hash.txt"
+  exit 1
+fi
+printf '%s' "$DEPS_HASH" > "$HASH_FILE"
+printf '%s' "$DEPS_HASH" > "$EMBEDDED_HASH_FILE"
+echo "Python deps hash: $DEPS_HASH"
 
 # ============================================================
 # Build with electron-builder

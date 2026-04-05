@@ -284,12 +284,22 @@ export function clampVal(val: number, limits: { min: number; max: number }): num
 
 /** Migrate old clips that don't have new effect fields */
 export function migrateClip(clip: TimelineClip): TimelineClip {
+  const transitionIn = clip.transitionIn ?? { type: 'none', duration: 0.5 }
+  const transitionOut = clip.transitionOut ?? { type: 'none', duration: 0.5 }
+  const legacyAudioFadeTypes = new Set(['dissolve', 'fade-to-black', 'fade-to-white'])
+  const audioFadeInDuration = clip.audioFadeInDuration
+    ?? (clip.type === 'audio' && legacyAudioFadeTypes.has(transitionIn.type) ? transitionIn.duration : 0)
+  const audioFadeOutDuration = clip.audioFadeOutDuration
+    ?? (clip.type === 'audio' && legacyAudioFadeTypes.has(transitionOut.type) ? transitionOut.duration : 0)
+
   return {
     ...clip,
     flipH: clip.flipH ?? false,
     flipV: clip.flipV ?? false,
-    transitionIn: clip.transitionIn ?? { type: 'none', duration: 0.5 },
-    transitionOut: clip.transitionOut ?? { type: 'none', duration: 0.5 },
+    transitionIn: clip.type === 'audio' ? { type: 'none', duration: 0 } : transitionIn,
+    transitionOut: clip.type === 'audio' ? { type: 'none', duration: 0 } : transitionOut,
+    audioFadeInDuration,
+    audioFadeOutDuration,
     colorCorrection: clip.colorCorrection ?? { ...DEFAULT_COLOR_CORRECTION },
     opacity: clip.opacity ?? 100,
     isRegenerating: false,

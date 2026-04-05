@@ -1,4 +1,4 @@
-import { execFile } from 'child_process'
+import { execFile, execFileSync } from 'child_process'
 import { app } from 'electron'
 import fs from 'fs'
 import http from 'http'
@@ -64,6 +64,36 @@ function getInstalledHashPath(): string {
   return path.join(app.getPath('userData'), 'python', 'deps-hash.txt')
 }
 
+function getRuntimePythonExecutable(pythonDir = getPythonDir()): string {
+  return process.platform === 'win32'
+    ? path.join(pythonDir, 'python.exe')
+    : path.join(pythonDir, 'bin', 'python3')
+}
+
+function hasRequiredRuntimeModules(pythonPath: string): boolean {
+  if (!fs.existsSync(pythonPath)) {
+    return false
+  }
+
+  try {
+    execFileSync(
+      pythonPath,
+      ['-c', 'from mcp.server.fastmcp import FastMCP; import fastapi'],
+      {
+        stdio: 'ignore',
+        env: {
+          ...process.env,
+          PYTHONNOUSERSITE: '1',
+        },
+      }
+    )
+    return true
+  } catch (error) {
+    logger.warn( `[python-setup] Python runtime validation failed for ${pythonPath}: ${error}`)
+    return false
+  }
+}
+
 /** Directory where python-embed lives at runtime. */
 export function getPythonDir(): string {
   if (process.platform === 'win32' || process.platform === 'linux') {
@@ -89,6 +119,8 @@ export function isPythonReady(): { ready: boolean } {
     return { ready: true }
   }
 
+  const pythonExe = getRuntimePythonExecutable()
+
   const bundledHash = readHash(getBundledHashPath())
 
   // Check if a pre-downloaded python-next/ is waiting to be promoted
@@ -102,7 +134,6 @@ export function isPythonReady(): { ready: boolean } {
         fs.rmSync(destDir, { recursive: true, force: true })
       }
       fs.renameSync(nextDir, destDir)
-      return { ready: true }
     } catch (err) {
       logger.error( `[python-setup] Failed to promote staged python: ${err}`)
       // Fall through to normal check
@@ -112,11 +143,14 @@ export function isPythonReady(): { ready: boolean } {
   const installedHash = readHash(getInstalledHashPath())
 
   if (!bundledHash) {
-    const pythonExe = path.join(getPythonDir(), process.platform === 'win32' ? 'python.exe' : 'bin/python3')
-    return { ready: fs.existsSync(pythonExe) }
+    return { ready: hasRequiredRuntimeModules(pythonExe) }
   }
 
-  return { ready: bundledHash === installedHash }
+  if (bundledHash !== installedHash) {
+    return { ready: false }
+  }
+
+  return { ready: hasRequiredRuntimeModules(pythonExe) }
 }
 
 /**
@@ -382,6 +416,11 @@ export async function downloadPythonEmbed(
     const bundledHash = getBundledHashPath()
     if (fs.existsSync(bundledHash)) {
       fs.copyFileSync(bundledHash, path.join(destDir, 'deps-hash.txt'))
+    }
+
+    const pythonExe = getRuntimePythonExecutable(destDir)
+    if (!hasRequiredRuntimeModules(pythonExe)) {
+      throw new Error('Downloaded Python environment is missing required runtime modules.')
     }
 
     onProgress({ status: 'complete', percent: 100, downloadedBytes: 0, totalBytes: 0, speed: 0 })

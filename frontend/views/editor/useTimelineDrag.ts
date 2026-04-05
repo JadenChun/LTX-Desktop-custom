@@ -1012,6 +1012,26 @@ export function useTimelineDrag(params: UseTimelineDragParams) {
   const handleSlipSlideUp = useCallback(() => {
     setSlipSlideClip(null)
   }, [])
+
+  const resolveDropTrackIndex = useCallback((asset: Asset, requestedTrackIndex: number): number | null => {
+    const requestedTrack = tracks[requestedTrackIndex]
+
+    const isUsableTrack = (track: Track | undefined, targetKind?: 'audio' | 'video') => {
+      if (!track || track.locked || track.type === 'subtitle' || track.sourcePatched === false) return false
+      if (!targetKind) return true
+      return track.kind === targetKind
+    }
+
+    if (asset.type === 'audio') {
+      if (isUsableTrack(requestedTrack, 'audio')) return requestedTrackIndex
+      const fallbackAudioTrackIndex = tracks.findIndex(track => isUsableTrack(track, 'audio'))
+      return fallbackAudioTrackIndex >= 0 ? fallbackAudioTrackIndex : null
+    }
+
+    if (isUsableTrack(requestedTrack, 'video')) return requestedTrackIndex
+    const fallbackVideoTrackIndex = tracks.findIndex(track => isUsableTrack(track, 'video'))
+    return fallbackVideoTrackIndex >= 0 ? fallbackVideoTrackIndex : null
+  }, [tracks])
   
   useEffect(() => {
     if (slipSlideClip) {
@@ -1070,7 +1090,9 @@ export function useTimelineDrag(params: UseTimelineDragParams) {
           const x = e.clientX - rect.left + scrollLeft
           let nextStart = Math.max(0, x / pixelsPerSecond)
           for (const a of droppedAssets) {
-            addClipToTimeline(a, trackIndex, nextStart)
+            const targetTrackIndex = resolveDropTrackIndex(a, trackIndex)
+            if (targetTrackIndex === null) continue
+            addClipToTimeline(a, targetTrackIndex, nextStart)
             nextStart += a.duration || 5
           }
           return
@@ -1094,7 +1116,9 @@ export function useTimelineDrag(params: UseTimelineDragParams) {
       const scrollLeft = trackContainerRef.current.scrollLeft
       const x = e.clientX - rect.left + scrollLeft
       const startTime = Math.max(0, x / pixelsPerSecond)
-      addClipToTimeline(asset, trackIndex, startTime)
+      const targetTrackIndex = resolveDropTrackIndex(asset, trackIndex)
+      if (targetTrackIndex === null) return
+      addClipToTimeline(asset, targetTrackIndex, startTime)
     }
   }
   

@@ -41,6 +41,7 @@ export function ClipPropertiesPanel(props: ClipPropertiesPanelProps) {
 
   const effectiveMuted = clipAudioControls?.muted ?? (selectedClip.muted || false)
   const effectiveVolume = clipAudioControls?.volume ?? (selectedClip.volume ?? 1)
+  const isAudioClip = selectedClip.type === 'audio'
 
   const getLiveAsset = (clip: TimelineClip): Asset | null | undefined => {
     if (!clip.assetId) return clip.asset
@@ -491,8 +492,28 @@ export function ClipPropertiesPanel(props: ClipPropertiesPanelProps) {
               <div className="flex items-center justify-between">
                 <span className="text-[10px] text-zinc-400">Size</span>
                 <div className="flex items-center gap-2">
-                  <input type="range" min={12} max={200} value={ts.fontSize} onChange={e => updateText({ fontSize: parseInt(e.target.value) })} className="w-20 accent-cyan-500" />
-                  <span className="text-[10px] text-zinc-300 w-8 text-right tabular-nums">{ts.fontSize}</span>
+                  <input
+                    type="range"
+                    min={12}
+                    max={200}
+                    value={ts.fontSize}
+                    onChange={e => updateText({ fontSize: parseInt(e.target.value) })}
+                    className="w-20 accent-cyan-500"
+                  />
+                  <input
+                    type="number"
+                    min={12}
+                    max={200}
+                    step={1}
+                    value={ts.fontSize}
+                    onChange={e => {
+                      const nextValue = parseInt(e.target.value, 10)
+                      if (Number.isNaN(nextValue)) return
+                      updateText({ fontSize: Math.max(12, Math.min(200, nextValue)) })
+                    }}
+                    className="w-14 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-[10px] text-white text-right tabular-nums focus:outline-none focus:border-cyan-500/50"
+                  />
+                  <span className="text-[10px] text-zinc-500">px</span>
                 </div>
               </div>
 
@@ -759,6 +780,89 @@ export function ClipPropertiesPanel(props: ClipPropertiesPanelProps) {
           </label>
         </div>
 
+        {isAudioClip && (
+          <div className="pt-3 border-t border-zinc-800">
+            <button
+              className="flex items-center gap-2 w-full text-left text-xs font-semibold text-zinc-400 hover:text-white transition-colors mb-2"
+              onClick={() => setShowTransitions(!showTransitions)}
+            >
+              {showTransitions ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              <FileAudio className="h-3.5 w-3.5" />
+              Audio Fades
+            </button>
+            {showTransitions && (
+              <div className="space-y-3 pl-5">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-[10px] text-zinc-500 uppercase tracking-wider">Fade In</label>
+                    <span className="text-[10px] text-zinc-400">{(selectedClip.audioFadeInDuration ?? 0).toFixed(1)}s</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="range"
+                      min={0}
+                      max={Math.max(0.1, selectedClip.duration)}
+                      step={0.1}
+                      value={selectedClip.audioFadeInDuration ?? 0}
+                      onChange={(e) => updateClip(selectedClip.id, { audioFadeInDuration: parseFloat(e.target.value) })}
+                      className="flex-1"
+                    />
+                    <input
+                      type="number"
+                      min={0}
+                      max={Math.max(0.1, selectedClip.duration)}
+                      step={0.1}
+                      value={selectedClip.audioFadeInDuration ?? 0}
+                      onChange={(e) => {
+                        const nextValue = parseFloat(e.target.value)
+                        if (Number.isNaN(nextValue)) return
+                        updateClip(selectedClip.id, {
+                          audioFadeInDuration: Math.max(0, Math.min(selectedClip.duration, nextValue)),
+                        })
+                      }}
+                      className="w-16 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-[10px] text-white text-right tabular-nums focus:outline-none focus:border-blue-500/50"
+                    />
+                    <span className="text-[10px] text-zinc-500">s</span>
+                  </div>
+                </div>
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-[10px] text-zinc-500 uppercase tracking-wider">Fade Out</label>
+                    <span className="text-[10px] text-zinc-400">{(selectedClip.audioFadeOutDuration ?? 0).toFixed(1)}s</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="range"
+                      min={0}
+                      max={Math.max(0.1, selectedClip.duration)}
+                      step={0.1}
+                      value={selectedClip.audioFadeOutDuration ?? 0}
+                      onChange={(e) => updateClip(selectedClip.id, { audioFadeOutDuration: parseFloat(e.target.value) })}
+                      className="flex-1"
+                    />
+                    <input
+                      type="number"
+                      min={0}
+                      max={Math.max(0.1, selectedClip.duration)}
+                      step={0.1}
+                      value={selectedClip.audioFadeOutDuration ?? 0}
+                      onChange={(e) => {
+                        const nextValue = parseFloat(e.target.value)
+                        if (Number.isNaN(nextValue)) return
+                        updateClip(selectedClip.id, {
+                          audioFadeOutDuration: Math.max(0, Math.min(selectedClip.duration, nextValue)),
+                        })
+                      }}
+                      className="w-16 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-[10px] text-white text-right tabular-nums focus:outline-none focus:border-blue-500/50"
+                    />
+                    <span className="text-[10px] text-zinc-500">s</span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* --- Opacity --- */}
         <div className="pt-3 border-t border-zinc-800">
           <div className="flex items-center justify-between mb-1.5">
@@ -817,6 +921,7 @@ export function ClipPropertiesPanel(props: ClipPropertiesPanelProps) {
         </div>
 
         {/* --- Transitions --- */}
+        {!isAudioClip && (
         <div className="pt-3 border-t border-zinc-800">
           <button
             className="flex items-center gap-2 w-full text-left text-xs font-semibold text-zinc-400 hover:text-white transition-colors mb-2"
@@ -909,6 +1014,7 @@ export function ClipPropertiesPanel(props: ClipPropertiesPanelProps) {
             </div>
           )}
         </div>
+        )}
 
         {/* EFFECTS HIDDEN - Applied Effects section hidden because effects are not applied during export */}
 

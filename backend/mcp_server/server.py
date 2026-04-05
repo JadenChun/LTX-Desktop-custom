@@ -35,6 +35,34 @@ logger = logging.getLogger(__name__)
 _store: ProjectStore | None = None
 
 
+def _remove_null_defaults(value: object) -> object:
+    """Recursively strip `default: null` from JSON Schema objects.
+
+    Some MCP hosts render tool schemas directly into model prompt templates.
+    LM Studio can fail during Jinja rendering when a schema includes a null
+    default and the template tries to coerce it to a string.
+
+    Keeping the field optional without an explicit null default preserves the
+    intended call semantics while improving compatibility with those hosts.
+    """
+    if isinstance(value, dict):
+        cleaned: dict[str, object] = {}
+        for key, nested in value.items():
+            if key == "default" and nested is None:
+                continue
+            cleaned[key] = _remove_null_defaults(nested)
+        return cleaned
+    if isinstance(value, list):
+        return [_remove_null_defaults(item) for item in value]
+    return value
+
+
+def _sanitize_tool_schemas(mcp: FastMCP) -> None:
+    """Normalize advertised tool schemas for MCP host compatibility."""
+    for tool in mcp._tool_manager.list_tools():  # noqa: SLF001
+        tool.parameters = _remove_null_defaults(tool.parameters)
+
+
 def get_store() -> ProjectStore:
     """Return the active ProjectStore. Raises if create_mcp_server was not called."""
     if _store is None:
@@ -66,6 +94,7 @@ def create_mcp_server(handler: "AppHandler") -> FastMCP:
     register_text_overlay_tools(mcp, _store)
     register_ai_generation_tools(mcp, handler)
     register_export_tools(mcp, _store)
+    _sanitize_tool_schemas(mcp)
 
     logger.info("MCP server created — %d tools registered", len(mcp._tool_manager._tools))  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
     return mcp

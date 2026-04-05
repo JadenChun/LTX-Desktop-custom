@@ -52,8 +52,8 @@ function extractPcmBuffer(
 interface AudioSource {
   filePath: string; trimStart: number; trimEnd: number;
   timelineStart: number; duration: number; speed: number; reversed: boolean; volume: number;
-  transitionIn?: { type: string; duration: number };
-  transitionOut?: { type: string; duration: number };
+  audioFadeInDuration?: number;
+  audioFadeOutDuration?: number;
 }
 
 /**
@@ -101,8 +101,8 @@ export async function mixAudioToPcm(
         speed: c.speed,
         reversed: c.reversed,
         volume: c.volume,
-        transitionIn: c.transitionIn,
-        transitionOut: c.transitionOut,
+        audioFadeInDuration: c.audioFadeInDuration,
+        audioFadeOutDuration: c.audioFadeOutDuration,
       })
     }
   }
@@ -125,10 +125,8 @@ export async function mixAudioToPcm(
       const numPcmSamples = Math.floor(pcm.length / BYTES_PER_SAMPLE)
 
       const clipDuration = src.duration
-      const hasFadeIn = src.transitionIn && src.transitionIn.duration > 0 &&
-        (src.transitionIn.type === 'fade-to-black' || src.transitionIn.type === 'dissolve' || src.transitionIn.type === 'fade-to-white')
-      const hasFadeOut = src.transitionOut && src.transitionOut.duration > 0 &&
-        (src.transitionOut.type === 'fade-to-black' || src.transitionOut.type === 'dissolve' || src.transitionOut.type === 'fade-to-white')
+      const fadeInDuration = Math.max(0, Math.min(src.audioFadeInDuration ?? 0, clipDuration))
+      const fadeOutDuration = Math.max(0, Math.min(src.audioFadeOutDuration ?? 0, clipDuration))
 
       for (let s = 0; s < numPcmSamples; s++) {
         const destIdx = startSample + s
@@ -139,12 +137,12 @@ export async function mixAudioToPcm(
         const frameIdx = Math.floor(s / NUM_CHANNELS)
         const timeInClip = frameIdx / SAMPLE_RATE
 
-        if (hasFadeIn && timeInClip < src.transitionIn!.duration) {
-          fadeFactor *= (timeInClip / src.transitionIn!.duration)
+        if (fadeInDuration > 0 && timeInClip < fadeInDuration) {
+          fadeFactor *= (timeInClip / fadeInDuration)
         }
-        if (hasFadeOut && timeInClip > (clipDuration - src.transitionOut!.duration)) {
+        if (fadeOutDuration > 0 && timeInClip > (clipDuration - fadeOutDuration)) {
           const fadeOutTime = clipDuration - timeInClip
-          fadeFactor *= Math.max(0, fadeOutTime / src.transitionOut!.duration)
+          fadeFactor *= Math.max(0, fadeOutTime / fadeOutDuration)
         }
 
         const value = pcm.readInt16LE(s * BYTES_PER_SAMPLE)

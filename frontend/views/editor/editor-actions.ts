@@ -196,6 +196,8 @@ function createTimelineClipFromAsset(asset: Asset, trackIndex: number, startTime
     flipV: false,
     transitionIn: { type: 'none', duration: 0 },
     transitionOut: { type: 'none', duration: 0 },
+    audioFadeInDuration: 0,
+    audioFadeOutDuration: 0,
     colorCorrection: { ...DEFAULT_COLOR_CORRECTION },
     opacity: 100,
   }
@@ -227,11 +229,33 @@ function buildDroppedAssetInsertion(
   }
 
   const createVideoClip = (isVideoAsset || isImageAsset || isAdjustment) && trackPatched
-  const needsAudioClip = isVideoAsset && !isAdjustment
+  const needsLinkedAudioClip = isVideoAsset && !isAdjustment
   let nextTracks = tracks
   let audioTrackIndex = -1
 
-  if (needsAudioClip) {
+  if (isAudioAsset) {
+    if (track.kind === 'audio' && !track.locked && track.sourcePatched !== false) {
+      audioTrackIndex = trackIndex
+    } else {
+      audioTrackIndex = nextTracks.findIndex(
+        candidate => candidate.kind === 'audio' && !candidate.locked && candidate.sourcePatched !== false,
+      )
+    }
+    if (audioTrackIndex < 0) {
+      const audioTrackCount = nextTracks.filter(candidate => candidate.kind === 'audio').length
+      nextTracks = [
+        ...nextTracks,
+        {
+          id: makeId('track-audio'),
+          name: `A${audioTrackCount + 1}`,
+          muted: false,
+          locked: false,
+          kind: 'audio',
+        },
+      ]
+      audioTrackIndex = nextTracks.length - 1
+    }
+  } else if (needsLinkedAudioClip) {
     audioTrackIndex = nextTracks.findIndex(
       (candidate, index) =>
         index > trackIndex &&
@@ -260,7 +284,7 @@ function buildDroppedAssetInsertion(
     }
   }
 
-  const createAudioClip = needsAudioClip && audioTrackIndex >= 0
+  const createAudioClip = (isAudioAsset || needsLinkedAudioClip) && audioTrackIndex >= 0
   if (!createVideoClip && !createAudioClip) {
     return { tracks: nextTracks, clips: [], duration: 0 }
   }
@@ -289,6 +313,8 @@ function buildDroppedAssetInsertion(
       flipV: false,
       transitionIn: { type: 'none', duration: isAdjustment ? 0 : 0.5 },
       transitionOut: { type: 'none', duration: isAdjustment ? 0 : 0.5 },
+      audioFadeInDuration: 0,
+      audioFadeOutDuration: 0,
       colorCorrection: { ...DEFAULT_COLOR_CORRECTION },
       opacity: 100,
       ...(isAdjustment ? { letterbox: { ...DEFAULT_LETTERBOX } } : {}),
@@ -313,11 +339,13 @@ function buildDroppedAssetInsertion(
       asset,
       flipH: false,
       flipV: false,
-      transitionIn: { type: 'none', duration: 0.5 },
-      transitionOut: { type: 'none', duration: 0.5 },
+      transitionIn: { type: 'none', duration: 0 },
+      transitionOut: { type: 'none', duration: 0 },
+      audioFadeInDuration: 0,
+      audioFadeOutDuration: 0,
       colorCorrection: { ...DEFAULT_COLOR_CORRECTION },
       opacity: 100,
-      ...(createVideoClip ? { linkedClipIds: [videoClipId] } : {}),
+      ...(needsLinkedAudioClip && createVideoClip ? { linkedClipIds: [videoClipId] } : {}),
     })
   }
 
@@ -347,6 +375,8 @@ function createTextClip(style?: Partial<TextOverlayStyle>, startTime = 0, trackI
     flipV: false,
     transitionIn: { type: 'none', duration: 0 },
     transitionOut: { type: 'none', duration: 0 },
+    audioFadeInDuration: 0,
+    audioFadeOutDuration: 0,
     colorCorrection: { ...DEFAULT_COLOR_CORRECTION },
     opacity: 100,
     textStyle: {
@@ -427,6 +457,8 @@ function buildSourceRequestClips(state: EditorState, params: SourceEditParams): 
     flipV: false as const,
     transitionIn: { type: 'none' as const, duration: 0.5 },
     transitionOut: { type: 'none' as const, duration: 0.5 },
+    audioFadeInDuration: 0,
+    audioFadeOutDuration: 0,
     colorCorrection: { ...DEFAULT_COLOR_CORRECTION },
     opacity: 100,
   }
@@ -723,6 +755,8 @@ export function importParsedTimeline(state: EditorState, parsed: ParsedTimeline)
       flipV: parsedClip.flipV || false,
       transitionIn: { type: 'none', duration: 0 },
       transitionOut: { type: 'none', duration: 0 },
+      audioFadeInDuration: 0,
+      audioFadeOutDuration: 0,
       colorCorrection: { ...DEFAULT_COLOR_CORRECTION },
       opacity: parsedClip.opacity !== undefined ? parsedClip.opacity : 100,
     })
@@ -1547,6 +1581,8 @@ export function insertGeneratedGapAsset(state: EditorState, params: InsertGenera
     flipV: false,
     transitionIn: { type: 'none', duration: 0 },
     transitionOut: { type: 'none', duration: 0 },
+    audioFadeInDuration: 0,
+    audioFadeOutDuration: 0,
     colorCorrection: { ...DEFAULT_COLOR_CORRECTION },
     opacity: 100,
     ...(params.createAudio && audioTrackIndex >= 0 ? { linkedClipIds: [audioClipId] } : {}),
@@ -1571,6 +1607,8 @@ export function insertGeneratedGapAsset(state: EditorState, params: InsertGenera
       flipV: false,
       transitionIn: { type: 'none', duration: 0 },
       transitionOut: { type: 'none', duration: 0 },
+      audioFadeInDuration: 0,
+      audioFadeOutDuration: 0,
       colorCorrection: { ...DEFAULT_COLOR_CORRECTION },
       opacity: 100,
       linkedClipIds: [videoClipId],

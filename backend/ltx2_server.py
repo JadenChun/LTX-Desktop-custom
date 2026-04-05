@@ -103,7 +103,7 @@ if use_sage_attention:
 # Constants & Paths
 # ============================================================
 
-PORT = 0
+PORT = 8765
 
 
 def _get_device() -> torch.device:
@@ -265,7 +265,7 @@ if __name__ == "__main__":
     import asyncio
     import uvicorn
 
-    port = int(os.environ.get("LTX_PORT", "") or PORT)
+    port = 8765  # Fixed port
     logger.info("=" * 60)
     logger.info("LTX-2 Video Generation Server (FastAPI + Uvicorn)")
     log_hardware_info()
@@ -274,8 +274,6 @@ if __name__ == "__main__":
     warmup_thread = threading.Thread(target=background_warmup, daemon=True)
     warmup_thread.start()
 
-    # Use our root logging config so uvicorn logs go to stdout (not its
-    # default stderr), letting Electron tag them correctly as INFO.
     log_config: dict[str, object] = {
         "version": 1,
         "disable_existing_loggers": False,
@@ -294,7 +292,6 @@ if __name__ == "__main__":
 
     import socket as _socket
 
-    # Bind the socket ourselves so we know the actual port before uvicorn starts.
     sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
     sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
     sock.bind(("127.0.0.1", port))
@@ -308,9 +305,7 @@ if __name__ == "__main__":
     async def _startup_with_ready_msg(sockets: list[_socket.socket] | None = None) -> None:
         await _orig_startup(sockets=sockets)
         if server.started:
-            # Machine-parseable ready message — Electron matches this line
             print(f"Server running on http://127.0.0.1:{actual_port}", flush=True)
-            # MCP connection info for AI agents
             print("", flush=True)
             print("=" * 60, flush=True)
             print("  MCP Server ready for AI agents (no auth required)", flush=True)

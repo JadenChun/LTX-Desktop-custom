@@ -15,6 +15,9 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectDir = Split-Path -Parent $ScriptDir
 $ReleaseDir = Join-Path $ProjectDir "release"
+$BackendDir = Join-Path $ProjectDir "backend"
+$HashFile = Join-Path $ProjectDir "python-deps-hash.txt"
+$EmbeddedHashFile = Join-Path $ProjectDir "python-embed\deps-hash.txt"
 
 Set-Location $ProjectDir
 
@@ -28,6 +31,30 @@ if (-not (Test-Path "python-embed")) {
     Write-Host "ERROR: Python environment not found. Run local-build.ps1 or prepare-python.ps1 first." -ForegroundColor Red
     exit 1
 }
+
+Write-Host "Generating python dependency hash..." -ForegroundColor Yellow
+$PythonVersion = (Get-Content (Join-Path $BackendDir ".python-version") -Raw).Trim()
+$LockHash = (Get-FileHash (Join-Path $BackendDir "uv.lock") -Algorithm SHA256).Hash.ToLowerInvariant()
+$HashMaterial = @(
+    "platform=win32-x64"
+    "python-version=$PythonVersion"
+    "uv-lock=$LockHash"
+) -join "`n"
+$HashBytes = [System.Text.Encoding]::UTF8.GetBytes($HashMaterial)
+$Hasher = [System.Security.Cryptography.SHA256]::Create()
+try {
+    $HashDigest = $Hasher.ComputeHash($HashBytes)
+    if ([Convert].GetMethod("ToHexString", [type[]]@([byte[]])) -ne $null) {
+        $DepsHash = [Convert]::ToHexString($HashDigest).ToLowerInvariant()
+    } else {
+        $DepsHash = ([System.BitConverter]::ToString($HashDigest) -replace "-", "").ToLowerInvariant()
+    }
+} finally {
+    $Hasher.Dispose()
+}
+Set-Content -Path $HashFile -Value $DepsHash -NoNewline
+Set-Content -Path $EmbeddedHashFile -Value $DepsHash -NoNewline
+Write-Host "Python deps hash: $DepsHash" -ForegroundColor DarkGray
 
 # Build with electron-builder
 if ($Unpack) {

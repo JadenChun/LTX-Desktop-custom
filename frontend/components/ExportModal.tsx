@@ -20,6 +20,8 @@ interface ExportModalProps {
 
 type ExportStatus = 'idle' | 'exporting' | 'done' | 'error'
 type ExportCodec = 'h264' | 'prores' | 'vp9'
+type ExportOrientation = 'landscape' | 'portrait'
+type ExportResolutionKey = '4k' | '1080p' | '720p'
 
 interface ExportSettings {
   codec: ExportCodec
@@ -35,11 +37,18 @@ const CODEC_INFO: Record<ExportCodec, { label: string; ext: string; description:
   vp9: { label: 'VP9 / WebM', ext: 'webm', description: 'Web-optimized format', filterName: 'WebM Video' },
 }
 
-const RESOLUTIONS = [
-  { label: '4K (3840 x 2160)', width: 3840, height: 2160 },
-  { label: '1080p (1920 x 1080)', width: 1920, height: 1080 },
-  { label: '720p (1280 x 720)', width: 1280, height: 720 },
-]
+const RESOLUTION_PRESETS: Record<ExportOrientation, Array<{ key: ExportResolutionKey; label: string; width: number; height: number }>> = {
+  landscape: [
+    { key: '4k', label: '4K (3840 x 2160)', width: 3840, height: 2160 },
+    { key: '1080p', label: '1080p (1920 x 1080)', width: 1920, height: 1080 },
+    { key: '720p', label: '720p (1280 x 720)', width: 1280, height: 720 },
+  ],
+  portrait: [
+    { key: '4k', label: '4K Portrait (2160 x 3840)', width: 2160, height: 3840 },
+    { key: '1080p', label: '1080p Portrait (1080 x 1920)', width: 1080, height: 1920 },
+    { key: '720p', label: '720p Portrait (720 x 1280)', width: 720, height: 1280 },
+  ],
+}
 
 const FRAME_RATES = [24, 25, 30, 60]
 
@@ -56,6 +65,18 @@ const LETTERBOX_RATIO_MAP: Record<string, number> = {
   '2.76:1': 2.76,
   '1.85:1': 1.85,
   '4:3': 4 / 3,
+}
+
+function getOrientationFromDimensions(width: number, height: number): ExportOrientation {
+  return height > width ? 'portrait' : 'landscape'
+}
+
+function getResolutionKeyFromDimensions(width: number, height: number): ExportResolutionKey | null {
+  for (const orientation of Object.keys(RESOLUTION_PRESETS) as ExportOrientation[]) {
+    const preset = RESOLUTION_PRESETS[orientation].find(item => item.width === width && item.height === height)
+    if (preset) return preset.key
+  }
+  return null
 }
 
 // Generate FCPXML for Premiere / DaVinci
@@ -179,6 +200,12 @@ export function ExportModal({ projectName }: ExportModalProps) {
         trackIndex: clip.trackIndex,
         muted: clip.muted || false,
         volume: clip.volume ?? 1,
+        transitionIn: clip.transitionIn,
+        transitionOut: clip.transitionOut,
+        audioFadeInDuration: clip.audioFadeInDuration ?? 0,
+        audioFadeOutDuration: clip.audioFadeOutDuration ?? 0,
+        motion: clip.motion,
+        colorCorrection: clip.colorCorrection,
       }))
   ), [assets, clips, tracks])
 
@@ -197,6 +224,45 @@ export function ExportModal({ projectName }: ExportModalProps) {
       }
     })
   ), [subtitles, tracks])
+
+  const textOverlayData = useMemo(() => (
+    clips
+      .filter(clip => clip.type === 'text' && Boolean(clip.textStyle))
+      .filter(clip => tracks[clip.trackIndex]?.enabled !== false)
+      .map(clip => {
+        const textStyle = clip.textStyle!
+        return {
+          text: textStyle.text,
+          startTime: clip.startTime,
+          endTime: clip.startTime + clip.duration,
+          trackIndex: clip.trackIndex,
+          style: {
+            fontFamily: textStyle.fontFamily,
+            fontSize: textStyle.fontSize,
+            fontWeight: textStyle.fontWeight,
+            fontStyle: textStyle.fontStyle,
+            color: textStyle.color,
+            backgroundColor: textStyle.backgroundColor,
+            textAlign: textStyle.textAlign,
+            positionX: textStyle.positionX,
+            positionY: textStyle.positionY,
+            strokeColor: textStyle.strokeColor,
+            strokeWidth: textStyle.strokeWidth,
+            shadowColor: textStyle.shadowColor,
+            shadowBlur: textStyle.shadowBlur,
+            shadowOffsetX: textStyle.shadowOffsetX,
+            shadowOffsetY: textStyle.shadowOffsetY,
+            letterSpacing: textStyle.letterSpacing,
+            lineHeight: textStyle.lineHeight,
+            maxWidth: textStyle.maxWidth,
+            padding: textStyle.padding,
+            borderRadius: textStyle.borderRadius,
+            opacity: textStyle.opacity,
+          },
+        }
+      })
+      .sort((a, b) => a.trackIndex - b.trackIndex)
+  ), [clips, tracks])
 
   const letterbox = useMemo(() => {
     const adjustmentClips = clips.filter(
@@ -236,6 +302,11 @@ export function ExportModal({ projectName }: ExportModalProps) {
     quality: 18, // CRF 18 for h264
   })
   const [burnSubtitles, setBurnSubtitles] = useState(true)
+  const exportOrientation = useMemo<ExportOrientation>(
+    () => getOrientationFromDimensions(settings.width, settings.height),
+    [settings.height, settings.width],
+  )
+  const visibleResolutions = RESOLUTION_PRESETS[exportOrientation]
 
   const closeModal = useCallback(() => {
     closeExportModal()
@@ -260,6 +331,20 @@ export function ExportModal({ projectName }: ExportModalProps) {
     if (codec === 'prores') quality = 3 // HQ profile
     if (codec === 'vp9') quality = 8 // 8 Mbps
     setSettings(prev => ({ ...prev, codec, quality }))
+  }, [])
+
+  const handleOrientationChange = useCallback((orientation: ExportOrientation) => {
+    setSettings(prev => {
+      const currentKey = getResolutionKeyFromDimensions(prev.width, prev.height) ?? '1080p'
+      const nextPreset = RESOLUTION_PRESETS[orientation].find(item => item.key === currentKey)
+        ?? RESOLUTION_PRESETS[orientation].find(item => item.key === '1080p')
+        ?? RESOLUTION_PRESETS[orientation][0]
+      return {
+        ...prev,
+        width: nextPreset.width,
+        height: nextPreset.height,
+      }
+    })
   }, [])
 
   const handleExportPackage = useCallback(async () => {
@@ -329,6 +414,12 @@ export function ExportModal({ projectName }: ExportModalProps) {
       // Build clip data for ffmpeg native export (video/image + audio clips)
       setExportFrameInfo('Starting ffmpeg...')
 
+      window.electronAPI?.onExportProgress((percent: number) => {
+        if (!abortRef.current) {
+          setExportProgress(percent)
+        }
+      })
+
       const result = await window.electronAPI?.exportNative({
         clips: exportClips,
         outputPath: filePath,
@@ -339,7 +430,10 @@ export function ExportModal({ projectName }: ExportModalProps) {
         quality: settings.quality,
         letterbox: letterbox || undefined,
         subtitles: burnSubtitles && subtitleData.length > 0 ? subtitleData : undefined,
+        textOverlays: textOverlayData.length > 0 ? textOverlayData : undefined,
       })
+
+      window.electronAPI?.removeExportProgress()
 
       if (result && !result.success) {
         throw new Error(result.error)
@@ -350,10 +444,11 @@ export function ExportModal({ projectName }: ExportModalProps) {
       setExportFrameInfo('Export complete')
       setExportStatus('done')
     } catch (err) {
+      window.electronAPI?.removeExportProgress()
       setExportError(String(err))
       setExportStatus('error')
     }
-  }, [burnSubtitles, exportClips, letterbox, projectName, settings, subtitleData, timeline])
+  }, [burnSubtitles, exportClips, letterbox, projectName, settings, subtitleData, textOverlayData, timeline])
 
   const handleCancel = useCallback(async () => {
     abortRef.current = true
@@ -533,6 +628,26 @@ export function ExportModal({ projectName }: ExportModalProps) {
                 </div>
               </div>
 
+              <div>
+                <label className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold mb-2 block">Orientation</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {(['landscape', 'portrait'] as ExportOrientation[]).map(orientation => (
+                    <button
+                      key={orientation}
+                      onClick={() => handleOrientationChange(orientation)}
+                      className={`p-2.5 rounded-lg border text-center transition-all ${
+                        exportOrientation === orientation
+                          ? 'border-blue-500 bg-blue-500/10 text-white'
+                          : 'border-zinc-700 bg-zinc-800/50 text-zinc-400 hover:border-zinc-600 hover:text-zinc-300'
+                      }`}
+                    >
+                      <p className="text-xs font-semibold">{orientation === 'landscape' ? 'Landscape' : 'Portrait'}</p>
+                      <p className="text-[9px] text-zinc-500 mt-0.5">{orientation === 'landscape' ? '16:9' : '9:16'}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               {/* Resolution & Frame rate row */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -546,7 +661,7 @@ export function ExportModal({ projectName }: ExportModalProps) {
                       }}
                       className="w-full appearance-none bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 pr-8 cursor-pointer"
                     >
-                      {RESOLUTIONS.map(r => (
+                      {visibleResolutions.map(r => (
                         <option key={`${r.width}x${r.height}`} value={`${r.width}x${r.height}`}>
                           {r.label}
                         </option>

@@ -53,6 +53,8 @@ const exportClip = z.object({
   volume: z.number(),
   transitionIn: z.object({ type: z.string(), duration: z.number() }).optional(),
   transitionOut: z.object({ type: z.string(), duration: z.number() }).optional(),
+  audioFadeInDuration: z.number().optional(),
+  audioFadeOutDuration: z.number().optional(),
   motion: kenBurnsMotion.optional(),
   colorCorrection: colorCorrection.optional(),
 })

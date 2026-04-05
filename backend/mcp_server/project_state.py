@@ -20,7 +20,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class SchemaModel(BaseModel):
@@ -138,7 +138,7 @@ class Asset(SchemaModel):
     id: str
     type: str   # "video" | "image" | "audio" | "adjustment"
     path: str   # absolute filesystem path
-    url: str    # file:///... URL (not blob:)
+    url: str | None = None   # file:///... URL (not blob:)
     prompt: str = ""
     resolution: str = ""
     duration: float | None = None
@@ -151,10 +151,33 @@ class Asset(SchemaModel):
     activeTakeIndex: int | None = None
     colorLabel: str | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _populate_missing_url(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+
+        url = value.get("url")
+        path_value = value.get("path")
+        if url or not isinstance(path_value, str) or not path_value:
+            return value
+
+        try:
+            value = dict(value)
+            value["url"] = Path(path_value).resolve().as_uri()
+        except Exception:
+            # If URL derivation fails, leave the payload untouched and let the
+            # regular validation error surface if a caller truly requires it.
+            return value
+
+        return value
+
 
 class TimelineClip(SchemaModel):
     id: str
-    assetId: str | None
+    # Text clips legitimately have no backing asset. Older persisted MCP project
+    # JSON may omit null-valued fields entirely, so treat a missing assetId as None.
+    assetId: str | None = None
     type: str   # "video" | "image" | "audio" | "adjustment" | "text"
     startTime: float    # position on timeline (seconds)
     duration: float     # duration on timeline (seconds)

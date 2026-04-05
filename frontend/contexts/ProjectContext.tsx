@@ -447,6 +447,7 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
     if (existingTimer) window.clearTimeout(existingTimer)
 
     const handle = window.setTimeout(async () => {
+      mcpSaveTimersRef.current.delete(projectId)
       const pending = mcpSavePendingRef.current.get(projectId)
       if (!pending || pending.mcpLastUpdatedAt === undefined) return
       if (mcpSaveInFlightRef.current.has(projectId)) {
@@ -508,6 +509,19 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   useEffect(() => {
+    for (const project of projects) {
+      if (project.mcpLastUpdatedAt === undefined) continue
+      if (project.updatedAt <= project.mcpLastUpdatedAt) continue
+
+      const pending = mcpSavePendingRef.current.get(project.id)
+      if (pending && pending.updatedAt >= project.updatedAt) continue
+
+      mcpSavePendingRef.current.set(project.id, project)
+      queueMcpSave(project.id)
+    }
+  }, [projects, queueMcpSave])
+
+  useEffect(() => {
     return () => {
       for (const handle of mcpSaveTimersRef.current.values()) {
         window.clearTimeout(handle)
@@ -529,7 +543,7 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
     if (signature === lastApprovedPathsSignatureRef.current) return
     lastApprovedPathsSignatureRef.current = signature
 
-    window.electronAPI.approvePaths(sortedPaths).catch((e) => {
+    window.electronAPI.approvePaths({ filePaths: sortedPaths }).catch((e) => {
       logger.info(`Failed to approve project paths: ${e}`)
     })
   }, [currentProject?.id, currentProject?.updatedAt])
@@ -550,12 +564,21 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
       assets: [],
       timelines: [defaultTimeline],
       activeTimelineId: defaultTimeline.id,
+      mcpLastUpdatedAt: 0,
     }
     setProjects(prev => [newProject, ...prev])
     return newProject
   }, [])
 
   const deleteProject = useCallback((id: string) => {
+    const existingTimer = mcpSaveTimersRef.current.get(id)
+    if (existingTimer) {
+      window.clearTimeout(existingTimer)
+      mcpSaveTimersRef.current.delete(id)
+    }
+    mcpSavePendingRef.current.delete(id)
+    mcpSaveInFlightRef.current.delete(id)
+
     // Try to delete from the MCP backend (fire and forget)
     void backendFetch(`/api/mcp/projects/${id}`, { method: 'DELETE' })
       .catch((e: any) => logger.info(`Failed to delete project on backend: ${e}`))

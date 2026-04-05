@@ -30,6 +30,8 @@ export interface ExportClip {
   muted: boolean; volume: number;
   transitionIn?: { type: string; duration: number };
   transitionOut?: { type: string; duration: number };
+  audioFadeInDuration?: number;
+  audioFadeOutDuration?: number;
   motion?: ClipMotion;
   colorCorrection?: ColorCorrection;
 }
