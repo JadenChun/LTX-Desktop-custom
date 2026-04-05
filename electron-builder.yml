@@ -1,6 +1,6 @@
-appId: com.lightricks.ltx-desktop
+appId: com.jadenchun.ltxdesktopcustom
 productName: LTX Desktop
-copyright: Copyright © 2026 Lightricks
+copyright: Copyright © 2026 JadenChun
 
 directories:
   output: release
@@ -117,5 +117,5 @@ deb:
 
 publish:
   provider: github
-  owner: Lightricks
-  repo: ltx-desktop
+  owner: ${env.LTX_RELEASE_OWNER}
+  repo: ${env.LTX_RELEASE_REPO}

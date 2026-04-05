@@ -18,8 +18,32 @@ $ReleaseDir = Join-Path $ProjectDir "release"
 $BackendDir = Join-Path $ProjectDir "backend"
 $HashFile = Join-Path $ProjectDir "python-deps-hash.txt"
 $EmbeddedHashFile = Join-Path $ProjectDir "python-embed\deps-hash.txt"
+$PackageJsonPath = Join-Path $ProjectDir "package.json"
 
 Set-Location $ProjectDir
+
+if (-not $env:LTX_RELEASE_OWNER -or -not $env:LTX_RELEASE_REPO) {
+    try {
+        $PackageJson = Get-Content $PackageJsonPath -Raw | ConvertFrom-Json
+        $Homepage = [string]$PackageJson.homepage
+        if ($Homepage) {
+            $Uri = [System.Uri]$Homepage
+            if ($Uri.Host -match "github\.com$") {
+                $Segments = $Uri.AbsolutePath.Trim('/').Split('/')
+                if ($Segments.Length -ge 2) {
+                    if (-not $env:LTX_RELEASE_OWNER) { $env:LTX_RELEASE_OWNER = $Segments[0] }
+                    if (-not $env:LTX_RELEASE_REPO) { $env:LTX_RELEASE_REPO = $Segments[1] }
+                }
+            }
+        }
+    } catch {
+        Write-Host "Warning: could not infer release owner/repo from package.json homepage." -ForegroundColor Yellow
+    }
+}
+
+if (-not $env:LTX_RELEASE_OWNER) { $env:LTX_RELEASE_OWNER = "Lightricks" }
+if (-not $env:LTX_RELEASE_REPO) { $env:LTX_RELEASE_REPO = "ltx-desktop" }
+Write-Host "Release source: $($env:LTX_RELEASE_OWNER)/$($env:LTX_RELEASE_REPO)" -ForegroundColor DarkGray
 
 # Verify prerequisites
 if (-not (Test-Path "dist") -or -not (Test-Path "dist-electron")) {

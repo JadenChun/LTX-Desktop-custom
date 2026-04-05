@@ -62,6 +62,23 @@ EMBEDDED_HASH_FILE="$PROJECT_DIR/python-embed/deps-hash.txt"
 
 cd "$PROJECT_DIR"
 
+if [ -z "${LTX_RELEASE_OWNER:-}" ] || [ -z "${LTX_RELEASE_REPO:-}" ]; then
+  PACKAGE_HOMEPAGE="$(node -e "const pkg=require('./package.json'); process.stdout.write(typeof pkg.homepage==='string' ? pkg.homepage : '')")"
+  if [ -n "$PACKAGE_HOMEPAGE" ]; then
+    REPO_PATH="$(node -e "const homepage=process.argv[1]; try { const u=new URL(homepage); if (/github\\.com$/i.test(u.host)) process.stdout.write(u.pathname.replace(/^\\/+|\\/+$/g,'')); } catch {}" "$PACKAGE_HOMEPAGE")"
+    if [ -n "$REPO_PATH" ]; then
+      RELEASE_OWNER_FROM_HOMEPAGE="${REPO_PATH%%/*}"
+      RELEASE_REPO_FROM_HOMEPAGE="${REPO_PATH#*/}"
+      if [ -z "${LTX_RELEASE_OWNER:-}" ]; then export LTX_RELEASE_OWNER="$RELEASE_OWNER_FROM_HOMEPAGE"; fi
+      if [ -z "${LTX_RELEASE_REPO:-}" ]; then export LTX_RELEASE_REPO="$RELEASE_REPO_FROM_HOMEPAGE"; fi
+    fi
+  fi
+fi
+
+export LTX_RELEASE_OWNER="${LTX_RELEASE_OWNER:-Lightricks}"
+export LTX_RELEASE_REPO="${LTX_RELEASE_REPO:-ltx-desktop}"
+echo "Release source: $LTX_RELEASE_OWNER/$LTX_RELEASE_REPO"
+
 # ============================================================
 # Verify prerequisites
 # ============================================================

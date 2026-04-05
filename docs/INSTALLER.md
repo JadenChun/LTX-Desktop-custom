@@ -20,6 +20,10 @@ The installer includes:
 - Model weights (downloaded on first run; can be large) from Hugging Face
 - On **Linux** and **Windows**: the Python environment itself is downloaded on first launch (keeps installer small)
 
+For Windows/Linux releases, the installer and the published `python-embed` archive must come from the same dependency state. If you ship a new installer without the matching runtime archive assets, first-run Python setup can fail after download/extract.
+
+Fork builds should publish from the fork's own release repo. The build scripts now infer the GitHub release owner/repo from `package.json.homepage`, or you can override them explicitly with `LTX_RELEASE_OWNER` and `LTX_RELEASE_REPO` before packaging. CDN fallback stays disabled for non-upstream forks unless you explicitly set `LTX_RELEASE_CDN_BASE`.
+
 The embedded Python is **fully isolated** from the target system's Python — it lives inside `{install_dir}/resources/python/` and never modifies system settings.
 
 ## Prerequisites
@@ -98,6 +102,37 @@ release/
 ```
 release/
   └── LTX Desktop-<version>-Setup.exe
+```
+
+## Upload Runtime Assets
+
+Installed Windows/Linux builds fetch the Python runtime from your GitHub release assets, so packaging the installer is only half of the release.
+
+On Windows, after `pnpm build`:
+
+```powershell
+pnpm package:python-runtime
+```
+
+This creates `release/python-runtime/` with:
+- `python-embed-win32.tar.gz`
+- `python-embed-win32.manifest.json`
+- split part files like `python-embed-win32.tar.gz.part-aa`
+- `python-deps-hash.txt`
+
+Then upload them to the matching GitHub release tag:
+
+```powershell
+$env:GITHUB_TOKEN="YOUR_GITHUB_TOKEN"
+pnpm upload:python-runtime
+```
+
+The upload script infers the target repo from `package.json.homepage`. For this fork, that means `JadenChun/LTX-Desktop`.
+
+If the GitHub release for the current version does not exist yet, use:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/upload-python-runtime-assets.ps1 -CreateIfMissing
 ```
 
 ## Application Icon

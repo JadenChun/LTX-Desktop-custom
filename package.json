@@ -1,14 +1,14 @@
 {
-  "name": "ltx-desktop",
+  "name": "ltx-desktop-custom",
   "version": "1.0.3",
-  "description": "LTX-2 Video Generation - Desktop App",
+  "description": "LTX Desktop - Custom Build",
   "type": "module",
   "main": "dist-electron/main.js",
   "author": {
-    "name": "Lightricks",
-    "email": "ltx-desktop-dev@lightricks.com"
+    "name": "JadenChun",
+    "email": "support@jadenchun.local"
   },
-  "homepage": "https://github.com/Lightricks/LTX-Desktop",
+  "homepage": "https://github.com/JadenChun/LTX-Desktop",
   "license": "Apache-2.0",
   "private": true,
   "packageManager": "pnpm@10.30.3",
@@ -28,6 +28,8 @@
     "build:skip-python": "node scripts/run-script.js scripts/local-build --skip-python",
     "build:fast": "node scripts/run-script.js scripts/local-build --unpack --skip-python",
     "prepare:python": "node scripts/run-script.js scripts/prepare-python",
+    "package:python-runtime": "powershell -ExecutionPolicy Bypass -File scripts/package-python-runtime.ps1",
+    "upload:python-runtime": "powershell -ExecutionPolicy Bypass -File scripts/upload-python-runtime-assets.ps1",
     "build:frontend": "vite build",
     "start:unpacked:mac": "open release/mac-arm64/LTX\\ Desktop.app",
     "start:unpacked:win": "powershell -Command \"& '.\\release\\win-unpacked\\LTX Desktop.exe'\""
