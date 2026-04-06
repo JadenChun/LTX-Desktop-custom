@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # create-installer.sh
-# Runs electron-builder to produce the installer (dmg/exe).
+# Runs electron-builder to produce distributable desktop packages.
 # This is the ONLY build stage that needs code-signing secrets.
 #
 # Expects the frontend to be built and python-embed to be ready.
@@ -126,7 +126,7 @@ else
   if [ -n "$PUBLISH" ]; then
     PUBLISH_ARGS="--publish $PUBLISH"
   fi
-  echo "Packaging installer..."
+  echo "Packaging desktop app..."
   pnpm exec electron-builder $BUILDER_ARGS $PUBLISH_ARGS
 fi
 echo ""

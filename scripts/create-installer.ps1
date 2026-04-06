@@ -1,5 +1,5 @@
 # create-installer.ps1
-# Runs electron-builder to produce the installer (exe).
+# Runs electron-builder to produce distributable desktop packages.
 # This is the ONLY build stage that needs code-signing secrets.
 #
 # Expects the frontend to be built and python-embed to be ready.
@@ -85,7 +85,7 @@ if ($Unpack) {
     Write-Host "Packaging unpacked app (fast mode)..." -ForegroundColor Yellow
     pnpm exec electron-builder --win --dir
 } else {
-    Write-Host "Packaging installer..." -ForegroundColor Yellow
+    Write-Host "Packaging desktop app..." -ForegroundColor Yellow
     $PublishArgs = @()
     if ($Publish -ne "") {
         $PublishArgs = @("--publish", $Publish)
@@ -110,12 +110,17 @@ if ($Unpack) {
     Write-Host "Run: $ExePath" -ForegroundColor Cyan
     Write-Host "`nTip: Just restart the app after code changes - no rebuild needed!" -ForegroundColor Green
 } else {
-    $Installer = Get-ChildItem -Path $ReleaseDir -Filter "*.exe" | Where-Object { $_.Name -like "*Setup*" } | Select-Object -First 1
-    if ($Installer) {
-        $InstallerSize = [math]::Round($Installer.Length / 1MB, 2)
-        Write-Host "`nInstaller: $($Installer.Name)" -ForegroundColor Cyan
-        Write-Host "Size: $InstallerSize MB" -ForegroundColor Cyan
-        Write-Host "Location: $($Installer.FullName)" -ForegroundColor Cyan
+    $Package = Get-ChildItem -Path $ReleaseDir | Where-Object {
+        $_.Extension -in @(".zip", ".dmg", ".exe", ".AppImage", ".deb")
+    } | Select-Object -First 1
+    if ($Package) {
+        $PackageSize = [math]::Round($Package.Length / 1MB, 2)
+        Write-Host "`nPackage: $($Package.Name)" -ForegroundColor Cyan
+        Write-Host "Size: $PackageSize MB" -ForegroundColor Cyan
+        Write-Host "Location: $($Package.FullName)" -ForegroundColor Cyan
+    }
+    if (Test-Path (Join-Path $ReleaseDir "win-unpacked\LTX Desktop.exe")) {
+        Write-Host "Run locally: $(Join-Path $ReleaseDir 'win-unpacked\LTX Desktop.exe')" -ForegroundColor Cyan
     }
 }
 

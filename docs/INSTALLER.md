@@ -18,11 +18,6 @@ The installer includes:
 
 **NOT bundled** (downloaded at runtime):
 - Model weights (downloaded on first run; can be large) from Hugging Face
-- On **Linux** and **Windows**: the Python environment itself is downloaded on first launch (keeps installer small)
-
-For Windows/Linux releases, the installer and the published `python-embed` archive must come from the same dependency state. If you ship a new installer without the matching runtime archive assets, first-run Python setup can fail after download/extract.
-
-Fork builds should publish from the fork's own release repo. The build scripts now infer the GitHub release owner/repo from `package.json.homepage`, or you can override them explicitly with `LTX_RELEASE_OWNER` and `LTX_RELEASE_REPO` before packaging. CDN fallback stays disabled for non-upstream forks unless you explicitly set `LTX_RELEASE_CDN_BASE`.
 
 The embedded Python is **fully isolated** from the target system's Python — it lives inside `{install_dir}/resources/python/` and never modifies system settings.
 
@@ -53,7 +48,7 @@ This auto-detects your platform and will:
 2. Install all Python dependencies (~10GB on Windows/Linux with CUDA, ~2-3GB on macOS with MPS)
 3. Build the frontend
 4. Package everything with electron-builder
-5. Create a DMG (macOS), AppImage + deb (Linux), or NSIS installer (Windows) in the `release/` folder
+5. Create a DMG (macOS), AppImage + deb (Linux), or zip package (Windows) in the `release/` folder
 
 ## Build Options
 
@@ -101,39 +96,11 @@ release/
 ### Windows
 ```
 release/
-  └── LTX Desktop-<version>-Setup.exe
+  ├── LTX Desktop-Windows-<version>.zip
+  └── win-unpacked/
 ```
 
-## Upload Runtime Assets
-
-Installed Windows/Linux builds fetch the Python runtime from your GitHub release assets, so packaging the installer is only half of the release.
-
-On Windows, after `pnpm build`:
-
-```powershell
-pnpm package:python-runtime
-```
-
-This creates `release/python-runtime/` with:
-- `python-embed-win32.tar.gz`
-- `python-embed-win32.manifest.json`
-- split part files like `python-embed-win32.tar.gz.part-aa`
-- `python-deps-hash.txt`
-
-Then upload them to the matching GitHub release tag:
-
-```powershell
-$env:GITHUB_TOKEN="YOUR_GITHUB_TOKEN"
-pnpm upload:python-runtime
-```
-
-The upload script infers the target repo from `package.json.homepage`. For this fork, that means `JadenChun/LTX-Desktop`.
-
-If the GitHub release for the current version does not exist yet, use:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/upload-python-runtime-assets.ps1 -CreateIfMissing
-```
+For Windows, extract the zip and run `win-unpacked/LTX Desktop.exe`.
 
 ## Application Icon
 
@@ -155,10 +122,10 @@ On unsigned builds, macOS Gatekeeper may block the app. Right-click the app and 
 xattr -dr com.apple.quarantine /Applications/LTX\ Desktop.app
 ```
 
-### Installer is too large
-Expected installer sizes (does not include model weights):
-- **Windows**: ~10GB (PyTorch CUDA ~2.5GB + ML libraries ~5GB + Python ~200MB + Electron ~100MB)
-- **Linux**: ~10GB (similar to Windows; PyTorch CUDA variant)
+### Package is too large
+Expected package sizes (does not include model weights):
+- **Windows**: large self-contained portable build (Python and dependencies are bundled for offline use)
+- **Linux**: large self-contained package (Python and dependencies are bundled)
 - **macOS**: ~2-3GB (PyTorch MPS is much smaller than CUDA variant)
 
 ### Runtime / first-run issues

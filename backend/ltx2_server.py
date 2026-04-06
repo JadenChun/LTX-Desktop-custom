@@ -25,9 +25,6 @@ import threading
 
 import torch
 
-import services.patches.record_stream_fix as _record_stream_fix  # pyright: ignore[reportUnusedImport]  # Remove once ltx-core includes the fix
-del _record_stream_fix
-
 from state.app_settings import AppSettings
 
 # ============================================================
@@ -45,6 +42,19 @@ console_handler.setLevel(logging.INFO)
 
 logging.basicConfig(level=logging.INFO, handlers=[console_handler])
 logger = logging.getLogger(__name__)
+
+try:
+    import services.patches.record_stream_fix as _record_stream_fix  # pyright: ignore[reportUnusedImport]  # Remove once ltx-core includes the fix
+except ModuleNotFoundError as exc:
+    if exc.name == "ltx_core.layer_streaming":
+        logger.warning(
+            "Skipping record_stream_fix patch because %s is unavailable in the installed ltx-core package",
+            exc.name,
+        )
+    else:
+        raise
+else:
+    del _record_stream_fix
 
 # ============================================================
 # SageAttention Integration

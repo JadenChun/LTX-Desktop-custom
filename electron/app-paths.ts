@@ -2,7 +2,7 @@ import { app } from 'electron'
 import path from 'path'
 import os from 'os'
 
-export const APP_FOLDER_NAME = 'LTXDesktopCustom'
+export const APP_FOLDER_NAME = 'LTXDesktop'
 
 function resolveUserDataPath(): string {
   if (process.platform === 'win32') {

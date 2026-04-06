@@ -360,59 +360,23 @@ function formatRuntimeSetupError(args: {
 
 /** Directory where python-embed lives at runtime. */
 export function getPythonDir(): string {
-  if (process.platform === 'win32' || process.platform === 'linux') {
-    if (isDev) {
-      return path.join(process.cwd(), 'python-embed')
-    }
-    return path.join(app.getPath('userData'), 'python')
+  if (isDev) {
+    return path.join(process.cwd(), 'python-embed')
   }
-  // macOS: bundled in resources
+
+  // Packaged builds ship with a fully bundled runtime for offline installs.
   return path.join(process.resourcesPath, 'python')
 }
 
 /**
  * Check whether the Python environment is ready to use.
- * Also promotes a staged python-next/ directory if it matches the expected hash.
  */
 export function isPythonReady(): { ready: boolean } {
-  if (process.platform === 'darwin') {
-    return { ready: true }
-  }
-
   if (isDev) {
     return { ready: true }
   }
 
   const pythonExe = getRuntimePythonExecutable()
-
-  const bundledHash = readHash(getBundledHashPath())
-
-  // Check if a pre-downloaded python-next/ is waiting to be promoted
-  const nextDir = path.join(app.getPath('userData'), 'python-next')
-  const nextHash = readHash(path.join(nextDir, 'deps-hash.txt'))
-  if (bundledHash && nextHash && bundledHash === nextHash) {
-    logger.info( '[python-setup] Promoting staged python-next/ to python/')
-    try {
-      const destDir = path.join(app.getPath('userData'), 'python')
-      if (fs.existsSync(destDir)) {
-        fs.rmSync(destDir, { recursive: true, force: true })
-      }
-      fs.renameSync(nextDir, destDir)
-    } catch (err) {
-      logger.error( `[python-setup] Failed to promote staged python: ${err}`)
-      // Fall through to normal check
-    }
-  }
-
-  const installedHash = readHash(getInstalledHashPath())
-
-  if (!bundledHash) {
-    return { ready: hasRequiredRuntimeModules(pythonExe) }
-  }
-
-  if (bundledHash !== installedHash) {
-    return { ready: false }
-  }
 
   return { ready: hasRequiredRuntimeModules(pythonExe) }
 }
@@ -426,98 +390,31 @@ export async function preDownloadPythonForUpdate(
   newVersion: string,
   onProgress?: (progress: PythonSetupProgress) => void
 ): Promise<boolean> {
-  if (process.platform === 'darwin') {
-    return false
-  }
+  void newVersion
+  void onProgress
+  return false
+}
 
-  const baseUrl = (isDev && process.env.LTX_PYTHON_URL?.replace(/^["']+|["']+$/g, ''))
-    || getGitHubReleaseBase(newVersion)
+export async function downloadPythonEmbed(
+  onProgress: (progress: PythonSetupProgress) => void
+): Promise<void> {
+  if (!isDev) {
+    const pythonExe = getRuntimePythonExecutable()
+    const validationResult = validateRuntimeModules(pythonExe)
 
-  // Fetch the new version's deps hash
-  let newHash: string | null = null
-  if (isLocalPath(baseUrl)) {
-    // Local testing: read hash from the directory or the archive's extracted deps-hash.txt
-    const hashFile = baseUrl.endsWith('.tar.gz')
-      ? null // Can't read hash from a single tar.gz without extracting
-      : path.join(baseUrl, 'deps-hash.txt')
-    newHash = hashFile ? readHash(hashFile) : null
-  } else {
-    const hashUrl = `${baseUrl}/python-deps-hash.txt`
-    const hashDest = path.join(app.getPath('userData'), 'python-next-hash-check.txt')
-    try {
-      await downloadFileRaw(hashUrl, hashDest)
-      newHash = readHash(hashDest)
-    } catch (err) {
-      logger.warn( `[python-setup] Could not fetch new version deps hash: ${err}`)
-    } finally {
-      try { fs.unlinkSync(hashDest) } catch { /* ignore */ }
-    }
-  }
-
-  if (!newHash) {
-    logger.info( '[python-setup] No deps hash available for new version, skipping pre-download')
-    return false
-  }
-
-  // Compare with currently installed hash
-  const installedHash = readHash(getInstalledHashPath())
-  if (newHash === installedHash) {
-    logger.info( '[python-setup] Python deps unchanged in new version, no pre-download needed')
-    return false
-  }
-
-  logger.info( `[python-setup] Python deps changed (${installedHash} → ${newHash}), pre-downloading`)
-
-  // Download to python-next/
-  const nextDir = path.join(app.getPath('userData'), 'python-next')
-  const tempDir = path.join(app.getPath('userData'), 'python-next-tmp')
-  const archivePath = path.join(app.getPath('userData'), 'python-next.tar.gz')
-
-  try {
-    if (fs.existsSync(nextDir)) fs.rmSync(nextDir, { recursive: true, force: true })
-    if (fs.existsSync(tempDir)) fs.rmSync(tempDir, { recursive: true, force: true })
-  } catch { /* ignore */ }
-
-  fs.mkdirSync(tempDir, { recursive: true })
-
-  const cleanupFiles: string[] = []
-  const noop = () => {}
-  const progressCb = onProgress || noop
-
-  try {
-    const cdnBase = getArchiveCdnBase()
-    const prefix = getPythonArchivePrefix()
-    const fallbackUrl = (cdnBase && newHash) ? `${cdnBase}/${prefix}/${newHash}/${prefix}.tar.gz` : null
-    const sources: ArchiveSourceAttempt[] = [{ url: baseUrl, label: 'primary', attempts: 2 }]
-    const singleFileUrl = getGitHubSingleFileArchiveUrl(baseUrl)
-    if (singleFileUrl && singleFileUrl !== baseUrl) {
-      sources.push({ url: singleFileUrl, label: 'github-single-file' })
-    }
-    if (fallbackUrl && !isLocalPath(baseUrl) && fallbackUrl !== baseUrl) {
-      sources.push({ url: fallbackUrl, label: 'cdn-fallback' })
+    if (!validationResult.ok) {
+      throw new Error(
+        `Bundled Python environment is not ready. ${validationResult.details || 'Missing required runtime modules.'}`
+      )
     }
 
-    await downloadAndExtractArchiveFromSources(sources, archivePath, tempDir, cleanupFiles, progressCb)
-
-    const extractedInner = path.join(tempDir, 'python-embed')
-    const extractedSource = fs.existsSync(extractedInner) ? extractedInner : tempDir
-
-    if (fs.existsSync(nextDir)) fs.rmSync(nextDir, { recursive: true, force: true })
-    fs.renameSync(extractedSource, nextDir)
-
-    // Write the new hash into python-next/ so isPythonReady can verify it on next launch
-    fs.writeFileSync(path.join(nextDir, 'deps-hash.txt'), newHash)
-
-    logger.info( '[python-setup] Pre-download complete, staged at python-next/')
-    return true
-  } catch (err) {
-    logger.error( `[python-setup] Pre-download failed: ${err}`)
-    try { fs.rmSync(nextDir, { recursive: true, force: true }) } catch { /* ignore */ }
-    return false
-  } finally {
-    cleanupArchiveArtifacts(archivePath, cleanupFiles)
-    try { if (fs.existsSync(tempDir)) fs.rmSync(tempDir, { recursive: true, force: true }) } catch { /* ignore */ }
+    onProgress({ status: 'extracting', percent: 100, downloadedBytes: 0, totalBytes: 0, speed: 0 })
+    onProgress({ status: 'complete', percent: 100, downloadedBytes: 0, totalBytes: 0, speed: 0 })
+    logger.info('[python-setup] Using bundled Python runtime from app resources')
+    return
   }
+
+  await downloadPythonEmbedRuntime(onProgress)
 }
 
 function readHash(filePath: string): string | null {
@@ -723,7 +620,7 @@ async function downloadAndExtractArchiveFromSources(
  * Download (or copy) python-embed archive and extract to userData/python/.
  * Tries GitHub Releases first, falls back to CDN if available.
  */
-export async function downloadPythonEmbed(
+async function downloadPythonEmbedRuntime(
   onProgress: (progress: PythonSetupProgress) => void
 ): Promise<void> {
   const destDir = path.join(app.getPath('userData'), 'python')
@@ -1060,3 +957,5 @@ function extractTarGz(archive: string, destDir: string): Promise<void> {
     })
   })
 }
+
+

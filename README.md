@@ -71,11 +71,11 @@ In API-only mode, available resolutions/durations may be limited to what the API
 
 LTX Desktop stores app data (settings, models, logs) in:
 
-- **Windows:** `%LOCALAPPDATA%\LTXDesktop\`
-- **macOS:** `~/Library/Application Support/LTXDesktop/`
-- **Linux:** `$XDG_DATA_HOME/LTXDesktop/` (default: `~/.local/share/LTXDesktop/`)
+- **Windows:** `%LOCALAPPDATA%\LTXDesktopCustom\`
+- **macOS:** `~/Library/Application Support/LTXDesktopCustom/`
+- **Linux:** `$XDG_DATA_HOME/LTXDesktopCustom/` (default: `~/.local/share/LTXDesktopCustom/`)
 
-Model weights are downloaded into the `models/` subfolder (this can be large and may take time).
+Model weights are downloaded into the `models/` subfolder (this can be large and may take time). The app runtime itself is bundled with the packaged build, so installer startup does not fetch Python separately.
 
 On first launch you may be prompted to review/accept model license terms (license text is fetched from Hugging Face; requires internet).
 
