@@ -179,6 +179,37 @@ pnpm backend:test
 Building installers:
 - See [`INSTALLER.md`](docs/INSTALLER.md)
 
+## AI Assistant / MCP Setup
+
+This repo does not ship a custom MCP server. If you use an MCP-compatible coding assistant, the main thing you need is filesystem access to the repo root so the assistant can read the project guidance and source files.
+
+Project guidance files:
+
+- [`AGENTS.md`](AGENTS.md) - shared repo instructions
+- [`.codex/skills/ltx-video-editor-development/SKILL.md`](.codex/skills/ltx-video-editor-development/SKILL.md) - Codex skill entrypoint
+- [`.claude/skills/video-editor-development/SKILL.md`](.claude/skills/video-editor-development/SKILL.md) - Claude skill entrypoint
+- [`.cursor/skills/video-editor-development/SKILL.md`](.cursor/skills/video-editor-development/SKILL.md) - Cursor skill entrypoint
+- [`docs/skills/video-editor-development.md`](docs/skills/video-editor-development.md) - shared editor architecture guidance
+
+Example filesystem MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "ltx-desktop-workspace": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/absolute/path/to/LTX-Desktop"
+      ]
+    }
+  }
+}
+```
+
+Replace `"/absolute/path/to/LTX-Desktop"` with your local clone path, then restart your MCP client so it reloads the server config.
+
 ## Telemetry
 
 LTX Desktop collects minimal, anonymous usage analytics (app version, platform, and a random installation ID) to help prioritize development. No personal information or generated content is collected. Analytics is enabled by default and can be disabled in **Settings > General > Anonymous Analytics**. See [`TELEMETRY.md`](docs/TELEMETRY.md) for details.
