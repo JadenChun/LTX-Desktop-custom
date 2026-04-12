@@ -5,17 +5,21 @@ lifecycle as agentic tool calls.
 
 ## Transport
 
-Streamable HTTP at `http://localhost:{PORT}/mcp`
+When LTX Desktop is running, the backend exposes:
 
-Authentication uses the same Bearer token as the main REST API.
+- Streamable HTTP at `http://127.0.0.1:8765/mcp`
+- SSE at `http://127.0.0.1:8765/mcp-sse`
 
-## Tools (39 total)
+MCP endpoints are localhost-only and currently do not require auth.
+
+## Tools (42 total)
 
 | Group | Tools |
 |-------|-------|
 | **Project** (4) | `create_project`, `open_project`, `save_project`, `get_project_state` |
 | **Assets** (3) | `import_asset`, `list_assets`, `get_asset_info` |
 | **Timeline – clip management** (6) | `add_clip`, `remove_clip`, `move_clip`, `trim_clip`, `split_clip`, `get_timeline_state` |
+| **Timeline – inspection** (3) | `inspect_timeline`, `preview_frame`, `preview_clip` |
 | **Timeline – clip properties** (12) | `set_clip_speed`, `set_clip_volume`, `set_clip_muted`, `reverse_clip`, `set_clip_opacity`, `flip_clip`, `set_clip_motion`, `set_clip_color_correction`, `set_clip_transition`, `add_clip_effect`, `remove_clip_effect`, `update_clip_effect` |
 | **Text overlays** (2) | `add_text_clip`, `update_text_clip_style` |
 | **Subtitles** (5) | `add_subtitle`, `update_subtitle`, `remove_subtitle`, `set_subtitle_style`, `list_subtitles` |
@@ -81,6 +85,13 @@ MCP projects are saved as JSON to `{outputs_dir}/mcp_projects/{id}.json`.
 The frontend lists MCP projects via `GET /api/mcp/projects` and fetches
 `GET /api/mcp/projects/{id}` when the backend project updates.
 
+## Hidden Preview Rendering
+
+`preview_frame` and `preview_clip` use a localhost-only Electron bridge plus a
+hidden preview window inside the desktop app. They do not depend on the visible
+editor UI being open, but they do require the backend to be launched by LTX
+Desktop so the bridge URL/token are available.
+
 ## Project State Directory
 
 Projects are stored at: `{handler.config.outputs_dir}/mcp_projects/`
@@ -88,5 +99,5 @@ Projects are stored at: `{handler.config.outputs_dir}/mcp_projects/`
 ## Connecting with MCP Inspector
 
 ```bash
-npx @modelcontextprotocol/inspector http://localhost:{PORT}/mcp
+npx @modelcontextprotocol/inspector http://127.0.0.1:8765/mcp
 ```

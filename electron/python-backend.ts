@@ -6,6 +6,7 @@ import { getAppDataDir } from './app-paths'
 import { getCurrentDir, isDev } from './config'
 import { logger, writeLog } from './logger'
 import { getCurrentLogFilename } from './logging-management'
+import { ensurePreviewBridgeServer } from './preview/preview-service'
 import { getPythonDir } from './python-setup'
 import { getMainWindow } from './window'
 
@@ -218,189 +219,199 @@ export async function startPythonBackend(): Promise<void> {
   isIntentionalShutdown = false
 
   startPromise = new Promise((resolve, reject) => {
-    const pythonPath = getPythonPath()
-    const backendPath = getBackendPath()
-    const mainPy = path.join(backendPath, 'ltx2_server.py')
+    void (async () => {
+      const previewBridge = await ensurePreviewBridgeServer()
 
-    logger.info(`Starting Python backend: ${pythonPath} ${mainPy}`)
+      const pythonPath = getPythonPath()
+      const backendPath = getBackendPath()
+      const mainPy = path.join(backendPath, 'ltx2_server.py')
 
-    // Windows embedded Python's ._pth file suppresses normal sys.path setup —
-    // the script's directory isn't added, so sibling packages (e.g. state/)
-    // can't be found. Use a -c wrapper to fix sys.path before running the server.
-    let pythonArgs: string[]
-    if (!isDev && process.platform === 'win32') {
-      const preamble = `import sys; sys.path.insert(0, r"${backendPath}"); import runpy; runpy.run_path(r"${mainPy}", run_name="__main__")`
-      pythonArgs = ['-u', '-c', preamble]
-    } else {
-      pythonArgs = isDev ? ['-Xfrozen_modules=off', '-u', mainPy] : ['-u', mainPy]
-    }
+      logger.info(`Starting Python backend: ${pythonPath} ${mainPy}`)
 
-    // Generate auth token and admin token for this backend session
-    authToken = crypto.randomBytes(32).toString('base64url')
-    adminToken = crypto.randomBytes(32).toString('base64url')
-
-    pythonProcess = spawn(pythonPath, pythonArgs, {
-      cwd: backendPath,
-      env: {
-        ...process.env,
-        PYTHONUNBUFFERED: '1',
-        PYTHONNOUSERSITE: '1',
-        // Only pass LTX_PORT when the developer explicitly set it
-        ...(process.env.LTX_PORT ? { LTX_PORT: process.env.LTX_PORT } : {}),
-        LTX_AUTH_TOKEN: authToken,
-        LTX_ADMIN_TOKEN: adminToken,
-        LTX_LOG_FILE: getCurrentLogFilename(),
-        LTX_APP_DATA_DIR: getAppDataDir(),
-        LTX_DEV_MODE: isDev ? '1' : '0',
-        PYTORCH_ENABLE_MPS_FALLBACK: '1',
-        // Set PYTHONHOME for bundled Python on macOS so it finds its stdlib
-        ...(!isDev && process.platform !== 'win32' ? {
-          PYTHONHOME: getPythonDir(),
-        } : {}),
-      },
-      stdio: ['ignore', 'pipe', 'pipe']
-    })
-
-    let started = false
-    let startupSettled = false
-    let sawPortConflict = false
-
-    const settleResolve = () => {
-      if (startupSettled) return
-      startupSettled = true
-      resolve()
-    }
-
-    const settleReject = (error: Error) => {
-      if (startupSettled) return
-      startupSettled = true
-      reject(error)
-    }
-
-    const checkStarted = (output: string) => {
-      if (isPortConflictOutput(output)) {
-        sawPortConflict = true
+      // Windows embedded Python's ._pth file suppresses normal sys.path setup —
+      // the script's directory isn't added, so sibling packages (e.g. state/)
+      // can't be found. Use a -c wrapper to fix sys.path before running the server.
+      let pythonArgs: string[]
+      if (!isDev && process.platform === 'win32') {
+        const preamble = `import sys; sys.path.insert(0, r"${backendPath}"); import runpy; runpy.run_path(r"${mainPy}", run_name="__main__")`
+        pythonArgs = ['-u', '-c', preamble]
+      } else {
+        pythonArgs = isDev ? ['-Xfrozen_modules=off', '-u', mainPy] : ['-u', mainPy]
       }
 
-      // Check if server has started — parse URL from ready message
-      if (!started) {
-        const readyMatch = output.match(/Server running on (http:\/\/\S+)/)
-        if (readyMatch) {
-          backendUrl = readyMatch[1]
-          started = true
-          backendOwnership = 'managed'
-          publishBackendHealthStatus({ status: 'alive' })
-          settleResolve()
-        } else if (output.includes('Uvicorn running')) {
-          // Fallback for legacy/dev uvicorn output
-          started = true
-          backendOwnership = 'managed'
-          publishBackendHealthStatus({ status: 'alive' })
-          settleResolve()
+      // Generate auth token and admin token for this backend session
+      authToken = crypto.randomBytes(32).toString('base64url')
+      adminToken = crypto.randomBytes(32).toString('base64url')
+
+      pythonProcess = spawn(pythonPath, pythonArgs, {
+        cwd: backendPath,
+        env: {
+          ...process.env,
+          PYTHONUNBUFFERED: '1',
+          PYTHONNOUSERSITE: '1',
+          // Only pass LTX_PORT when the developer explicitly set it
+          ...(process.env.LTX_PORT ? { LTX_PORT: process.env.LTX_PORT } : {}),
+          LTX_AUTH_TOKEN: authToken,
+          LTX_ADMIN_TOKEN: adminToken,
+          LTX_ELECTRON_BRIDGE_URL: previewBridge.url,
+          LTX_ELECTRON_BRIDGE_TOKEN: previewBridge.token,
+          LTX_LOG_FILE: getCurrentLogFilename(),
+          LTX_APP_DATA_DIR: getAppDataDir(),
+          LTX_DEV_MODE: isDev ? '1' : '0',
+          PYTORCH_ENABLE_MPS_FALLBACK: '1',
+          // Set PYTHONHOME for bundled Python on macOS so it finds its stdlib
+          ...(!isDev && process.platform !== 'win32' ? {
+            PYTHONHOME: getPythonDir(),
+          } : {}),
+        },
+        stdio: ['ignore', 'pipe', 'pipe']
+      })
+
+      let started = false
+      let startupSettled = false
+      let sawPortConflict = false
+
+      const settleResolve = () => {
+        if (startupSettled) return
+        startupSettled = true
+        resolve()
+      }
+
+      const settleReject = (error: Error) => {
+        if (startupSettled) return
+        startupSettled = true
+        reject(error)
+      }
+
+      const checkStarted = (output: string) => {
+        if (isPortConflictOutput(output)) {
+          sawPortConflict = true
+        }
+
+        // Check if server has started — parse URL from ready message
+        if (!started) {
+          const readyMatch = output.match(/Server running on (http:\/\/\S+)/)
+          if (readyMatch) {
+            backendUrl = readyMatch[1]
+            started = true
+            backendOwnership = 'managed'
+            publishBackendHealthStatus({ status: 'alive' })
+            settleResolve()
+          } else if (output.includes('Uvicorn running')) {
+            // Fallback for legacy/dev uvicorn output
+            started = true
+            backendOwnership = 'managed'
+            publishBackendHealthStatus({ status: 'alive' })
+            settleResolve()
+          }
         }
       }
-    }
 
-    pythonProcess.stdout?.on('data', (data: Buffer) => {
-      const output = data.toString()
-      console.log(`[Python] ${output}`)
-      for (const line of output.split('\n')) {
-        const trimmed = line.trimEnd()
-        if (trimmed) writeLog('INFO', 'Backend', trimmed)
-      }
-      checkStarted(output)
-    })
+      pythonProcess.stdout?.on('data', (data: Buffer) => {
+        const output = data.toString()
+        console.log(`[Python] ${output}`)
+        for (const line of output.split('\n')) {
+          const trimmed = line.trimEnd()
+          if (trimmed) writeLog('INFO', 'Backend', trimmed)
+        }
+        checkStarted(output)
+      })
 
-    pythonProcess.stderr?.on('data', (data: Buffer) => {
-      const output = data.toString()
-      console.error(`[Python Error] ${output}`)
-      for (const line of output.split('\n')) {
-        const trimmed = line.trimEnd()
-        if (trimmed) writeLog('ERROR', 'Backend', trimmed)
-      }
-      checkStarted(output)
-    })
+      pythonProcess.stderr?.on('data', (data: Buffer) => {
+        const output = data.toString()
+        console.error(`[Python Error] ${output}`)
+        for (const line of output.split('\n')) {
+          const trimmed = line.trimEnd()
+          if (trimmed) writeLog('ERROR', 'Backend', trimmed)
+        }
+        checkStarted(output)
+      })
 
-    pythonProcess.on('error', (error) => {
-      logger.error(`Failed to start Python backend: ${error}`)
-      if (!started) {
-        backendOwnership = null
-        publishBackendHealthStatus({ status: 'dead' })
-        settleReject(error)
-      }
-    })
-
-    pythonProcess.on('exit', async (code) => {
-      logger.info(`Python backend exited with code ${code}`)
-      pythonProcess = null
-      backendUrl = null
-      authToken = null
-      adminToken = null
-
-      if (!started) {
-        if (isIntentionalShutdown) {
-          isIntentionalShutdown = false
+      pythonProcess.on('error', (error) => {
+        logger.error(`Failed to start Python backend: ${error}`)
+        if (!started) {
           backendOwnership = null
-          settleReject(new Error('Python backend stopped during startup'))
+          publishBackendHealthStatus({ status: 'dead' })
+          settleReject(error)
+        }
+      })
+
+      pythonProcess.on('exit', async (code) => {
+        logger.info(`Python backend exited with code ${code}`)
+        pythonProcess = null
+        backendUrl = null
+        authToken = null
+        adminToken = null
+
+        if (!started) {
+          if (isIntentionalShutdown) {
+            isIntentionalShutdown = false
+            backendOwnership = null
+            settleReject(new Error('Python backend stopped during startup'))
+            return
+          }
+
+          if (sawPortConflict && process.env.LTX_PORT) {
+            const explicitUrl = `http://127.0.0.1:${process.env.LTX_PORT}`
+            const healthyExistingBackend = await probeBackendHealth(1500, explicitUrl)
+            if (healthyExistingBackend) {
+              backendUrl = explicitUrl
+              backendOwnership = 'adopted'
+              publishBackendHealthStatus({ status: 'alive' })
+              settleResolve()
+              startOwnershipTakeover()
+              return
+            }
+          }
+
+          backendOwnership = null
+          publishBackendHealthStatus({ status: 'dead', exitCode: code })
+          settleReject(new Error(`Python backend exited during startup with code ${code}`))
           return
         }
 
-        if (sawPortConflict && process.env.LTX_PORT) {
-          const explicitUrl = `http://127.0.0.1:${process.env.LTX_PORT}`
-          const healthyExistingBackend = await probeBackendHealth(1500, explicitUrl)
-          if (healthyExistingBackend) {
-            backendUrl = explicitUrl
-            backendOwnership = 'adopted'
-            publishBackendHealthStatus({ status: 'alive' })
-            settleResolve()
-            startOwnershipTakeover()
-            return
-          }
+        if (isIntentionalShutdown) {
+          isIntentionalShutdown = false
+          backendOwnership = null
+          return
         }
 
+        backendOwnership = 'managed'
+        const now = Date.now()
+        if (now - lastCrashTime < CRASH_DEBOUNCE_MS) {
+          publishBackendHealthStatus({ status: 'dead', exitCode: code })
+          return
+        }
+
+        lastCrashTime = now
+        publishBackendHealthStatus({ status: 'restarting', exitCode: code })
+        try {
+          await startPythonBackend()
+        } catch {
+          publishBackendHealthStatus({ status: 'dead', exitCode: code })
+        }
+      })
+
+      // Timeout after 5 minutes (model loading can take a while on first run)
+      setTimeout(() => {
+        if (startupSettled || started) {
+          return
+        }
+
+        try {
+          pythonProcess?.kill('SIGTERM')
+        } catch {
+          // Process may already be dead.
+        }
         backendOwnership = null
-        publishBackendHealthStatus({ status: 'dead', exitCode: code })
-        settleReject(new Error(`Python backend exited during startup with code ${code}`))
-        return
-      }
-
-      if (isIntentionalShutdown) {
-        isIntentionalShutdown = false
-        backendOwnership = null
-        return
-      }
-
-      backendOwnership = 'managed'
-      const now = Date.now()
-      if (now - lastCrashTime < CRASH_DEBOUNCE_MS) {
-        publishBackendHealthStatus({ status: 'dead', exitCode: code })
-        return
-      }
-
-      lastCrashTime = now
-      publishBackendHealthStatus({ status: 'restarting', exitCode: code })
-      try {
-        await startPythonBackend()
-      } catch {
-        publishBackendHealthStatus({ status: 'dead', exitCode: code })
-      }
-    })
-
-    // Timeout after 5 minutes (model loading can take a while on first run)
-    setTimeout(() => {
-      if (startupSettled || started) {
-        return
-      }
-
-      try {
-        pythonProcess?.kill('SIGTERM')
-      } catch {
-        // Process may already be dead.
-      }
+        publishBackendHealthStatus({ status: 'dead' })
+        settleReject(new Error('Python backend failed to start within 5 minutes'))
+      }, 300000)
+    })().catch((error: unknown) => {
       backendOwnership = null
       publishBackendHealthStatus({ status: 'dead' })
-      settleReject(new Error('Python backend failed to start within 5 minutes'))
-    }, 300000)
+      settleReject(error instanceof Error ? error : new Error(String(error)))
+    })
   })
 
   try {

@@ -9,6 +9,7 @@ import { useBackend } from './hooks/use-backend'
 import { logger } from './lib/logger'
 import { Home } from './views/Home'
 import { Project } from './views/Project'
+import { AgentPreviewPage } from './views/AgentPreviewPage'
 import { LaunchGate } from './components/FirstRunSetup'
 import { PythonSetup } from './components/PythonSetup'
 import { SettingsModal, type SettingsTabId } from './components/SettingsModal'
@@ -491,6 +492,13 @@ function AppContent() {
 }
 
 export default function App() {
+  if (typeof window !== 'undefined') {
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('agentPreview') === '1') {
+      return <AgentPreviewPage />
+    }
+  }
+
   return (
     <ProjectProvider>
       <KeyboardShortcutsProvider>

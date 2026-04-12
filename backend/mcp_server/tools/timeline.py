@@ -4,12 +4,316 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
+from mcp_server.electron_preview_bridge import render_preview_clip, render_preview_frame
 
 if TYPE_CHECKING:
-    from mcp_server.project_state import ProjectStore
+    from mcp_server.project_state import ProjectStore, SubtitleClip, Timeline, TimelineClip, Track
+
+
+_LETTERBOX_RATIO_MAP: dict[str, float] = {
+    "2.35:1": 2.35,
+    "2.39:1": 2.39,
+    "2.76:1": 2.76,
+    "1.85:1": 1.85,
+    "4:3": 4 / 3,
+}
+
+
+def _clip_active_at_time(clip: "TimelineClip", time: float) -> bool:
+    return time >= clip.startTime and time < clip.startTime + clip.duration
+
+
+def _track_output_disabled(tracks: list["Track"], track_index: int) -> bool:
+    return bool(0 <= track_index < len(tracks) and tracks[track_index].enabled is False)
+
+
+def _get_top_visible_clip_at_time(
+    media_clips: list["TimelineClip"],
+    tracks: list["Track"],
+    time: float,
+) -> "TimelineClip | None":
+    best: tuple["TimelineClip", int] | None = None
+
+    for array_index, clip in enumerate(media_clips):
+        if _track_output_disabled(tracks, clip.trackIndex):
+            continue
+        if not _clip_active_at_time(clip, time):
+            continue
+        if best is None:
+            best = (clip, array_index)
+            continue
+        best_clip, best_array_index = best
+        if clip.trackIndex > best_clip.trackIndex or (
+            clip.trackIndex == best_clip.trackIndex and array_index > best_array_index
+        ):
+            best = (clip, array_index)
+
+    return best[0] if best is not None else None
+
+
+def _get_dissolve_at_time(
+    media_clips: list["TimelineClip"],
+    tracks: list["Track"],
+    time: float,
+) -> tuple[dict[str, "TimelineClip"], float] | None:
+    for clip_a in media_clips:
+        if _track_output_disabled(tracks, clip_a.trackIndex):
+            continue
+        if clip_a.transitionOut.type != "dissolve" or clip_a.transitionOut.duration <= 0:
+            continue
+        clip_a_end = clip_a.startTime + clip_a.duration
+        dissolve_start = clip_a_end - clip_a.transitionOut.duration
+        if time < dissolve_start or time >= clip_a_end:
+            continue
+        for candidate in media_clips:
+            if candidate.id == clip_a.id:
+                continue
+            if _track_output_disabled(tracks, candidate.trackIndex):
+                continue
+            if candidate.trackIndex != clip_a.trackIndex:
+                continue
+            if candidate.transitionIn.type != "dissolve":
+                continue
+            if abs(candidate.startTime - clip_a_end) >= 0.05:
+                continue
+            progress = max(
+                0.0,
+                min(1.0, (time - dissolve_start) / clip_a.transitionOut.duration),
+            )
+            return ({"outgoing": clip_a, "incoming": candidate}, progress)
+    return None
+
+
+def _get_active_text_clips(
+    text_clips: list["TimelineClip"],
+    tracks: list["Track"],
+    time: float,
+) -> list["TimelineClip"]:
+    return sorted(
+        [
+            clip
+            for clip in text_clips
+            if not _track_output_disabled(tracks, clip.trackIndex) and _clip_active_at_time(clip, time)
+        ],
+        key=lambda clip: clip.trackIndex,
+    )
+
+
+def _get_active_subtitles(
+    subtitles: list["SubtitleClip"],
+    tracks: list["Track"],
+    time: float,
+) -> list["SubtitleClip"]:
+    active: list["SubtitleClip"] = []
+    for subtitle in subtitles:
+        if not (0 <= subtitle.trackIndex < len(tracks)):
+            continue
+        if tracks[subtitle.trackIndex].muted:
+            continue
+        if time >= subtitle.startTime and time < subtitle.endTime:
+            active.append(subtitle)
+    return active
+
+
+def _get_active_letterbox(
+    adjustment_clips: list["TimelineClip"],
+    tracks: list["Track"],
+    time: float,
+) -> dict[str, Any] | None:
+    active_adjustments = sorted(
+        [
+            clip
+            for clip in adjustment_clips
+            if not _track_output_disabled(tracks, clip.trackIndex) and _clip_active_at_time(clip, time)
+        ],
+        key=lambda clip: clip.trackIndex,
+        reverse=True,
+    )
+
+    for clip in active_adjustments:
+        letterbox = clip.letterbox
+        if not letterbox or not letterbox.get("enabled"):
+            continue
+        ratio = (
+            letterbox.get("customRatio", 2.35)
+            if letterbox.get("aspectRatio") == "custom"
+            else _LETTERBOX_RATIO_MAP.get(str(letterbox.get("aspectRatio")), 2.35)
+        )
+        color = str(letterbox.get("color", "#000000"))
+        opacity = float(letterbox.get("opacity", 100)) / 100
+        return {
+            "ratio": ratio,
+            "color": color,
+            "opacity": opacity,
+            "key": f"{clip.id}:{ratio}:{color}:{letterbox.get('opacity', 100)}",
+        }
+
+    return None
+
+
+def _get_compositing_stack(
+    media_clips: list["TimelineClip"],
+    tracks: list["Track"],
+    active_clip: "TimelineClip | None",
+    time: float,
+) -> list["TimelineClip"]:
+    if active_clip is None or active_clip.opacity >= 100:
+        return []
+
+    return sorted(
+        [
+            clip
+            for clip in media_clips
+            if clip.id != active_clip.id
+            and not _track_output_disabled(tracks, clip.trackIndex)
+            and clip.trackIndex < active_clip.trackIndex
+            and _clip_active_at_time(clip, time)
+        ],
+        key=lambda clip: clip.trackIndex,
+    )
+
+
+def _clip_visual_opacity(clip: "TimelineClip", time: float) -> float:
+    opacity = clip.opacity / 100
+    time_in_clip = max(0.0, time - clip.startTime)
+    transition_in = clip.transitionIn
+    transition_out = clip.transitionOut
+
+    if transition_in.duration > 0 and time_in_clip < transition_in.duration:
+        if transition_in.type in ("fade-to-black", "fade-to-white"):
+            opacity = min(opacity, time_in_clip / transition_in.duration)
+
+    if transition_out.duration > 0:
+        time_from_end = clip.duration - time_in_clip
+        if time_from_end < transition_out.duration:
+            if transition_out.type in ("fade-to-black", "fade-to-white"):
+                opacity = min(opacity, time_from_end / transition_out.duration)
+
+    return opacity
+
+
+def _get_active_video_contributors(
+    active_clip: "TimelineClip | None",
+    cross_dissolve: dict[str, "TimelineClip"] | None,
+    cross_dissolve_progress: float,
+    compositing_stack: list["TimelineClip"],
+    time: float,
+) -> list[dict[str, Any]]:
+    contributors: list[dict[str, Any]] = []
+    primary_clip = cross_dissolve["outgoing"] if cross_dissolve is not None else active_clip
+
+    if primary_clip is not None and primary_clip.asset is not None and primary_clip.asset.type == "video":
+        primary_opacity = (
+            (1 - cross_dissolve_progress) * (cross_dissolve["outgoing"].opacity / 100)
+            if cross_dissolve is not None
+            else _clip_visual_opacity(primary_clip, time)
+        )
+        contributors.append({
+            "clipId": primary_clip.id,
+            "target": "active",
+            "role": "primary",
+            "opacity": primary_opacity,
+        })
+
+    if cross_dissolve is not None:
+        incoming = cross_dissolve["incoming"]
+        if incoming.asset is not None and incoming.asset.type == "video":
+            contributors.append({
+                "clipId": incoming.id,
+                "target": "incoming",
+                "role": "dissolveIncoming",
+                "opacity": cross_dissolve_progress * (incoming.opacity / 100),
+            })
+
+    for clip in compositing_stack:
+        if clip.asset is None or clip.asset.type != "video":
+            continue
+        contributors.append({
+            "clipId": clip.id,
+            "target": "compositing",
+            "role": "compositing",
+            "opacity": _clip_visual_opacity(clip, time),
+        })
+
+    return contributors
+
+
+def _inspect_timeline_render_state(timeline: "Timeline", time: float) -> dict[str, Any]:
+    media_clips = [
+        clip
+        for clip in timeline.clips
+        if clip.type not in ("audio", "adjustment", "text")
+    ]
+    text_clips = [
+        clip
+        for clip in timeline.clips
+        if clip.type == "text" and clip.textStyle is not None
+    ]
+    adjustment_clips = [
+        clip
+        for clip in timeline.clips
+        if clip.type == "adjustment"
+    ]
+    audio_clips = [
+        clip
+        for clip in timeline.clips
+        if clip.type == "audio"
+    ]
+
+    active_clip = _get_top_visible_clip_at_time(media_clips, timeline.tracks, time)
+    dissolve = _get_dissolve_at_time(media_clips, timeline.tracks, time)
+    cross_dissolve = dissolve[0] if dissolve is not None else None
+    cross_dissolve_progress = dissolve[1] if dissolve is not None else 0.0
+    compositing_stack = _get_compositing_stack(media_clips, timeline.tracks, active_clip, time)
+
+    return {
+        "time": time,
+        "activeClip": active_clip.model_dump() if active_clip is not None else None,
+        "crossDissolve": (
+            {
+                "outgoing": cross_dissolve["outgoing"].model_dump(),
+                "incoming": cross_dissolve["incoming"].model_dump(),
+            }
+            if cross_dissolve is not None
+            else None
+        ),
+        "crossDissolveProgress": cross_dissolve_progress,
+        "compositingStack": [clip.model_dump() for clip in compositing_stack],
+        "activeTextClips": [
+            clip.model_dump()
+            for clip in _get_active_text_clips(text_clips, timeline.tracks, time)
+        ],
+        "activeSubtitles": [
+            subtitle.model_dump()
+            for subtitle in _get_active_subtitles(timeline.subtitles, timeline.tracks, time)
+        ],
+        "activeLetterbox": _get_active_letterbox(adjustment_clips, timeline.tracks, time),
+        "audioOnlyClips": [
+            clip.model_dump()
+            for clip in audio_clips
+            if _clip_active_at_time(clip, time)
+        ],
+        "activeVideoContributors": _get_active_video_contributors(
+            active_clip,
+            cross_dissolve,
+            cross_dissolve_progress,
+            compositing_stack,
+            time,
+        ),
+    }
+
+
+def _timeline_duration(timeline: "Timeline") -> float:
+    duration = 0.0
+    for clip in timeline.clips:
+        duration = max(duration, clip.startTime + clip.duration)
+    for subtitle in timeline.subtitles:
+        duration = max(duration, subtitle.endTime)
+    return duration
 
 
 def register_timeline_tools(mcp: FastMCP, store: "ProjectStore") -> None:
@@ -127,6 +431,110 @@ def register_timeline_tools(mcp: FastMCP, store: "ProjectStore") -> None:
             "subtitles": [s.model_dump() for s in subs],
             "tracks": [t.model_dump() for t in tl.tracks],
         }
+
+    @mcp.tool()
+    async def inspect_timeline(
+        time: float | None = None,
+        detail: Literal["summary", "full"] = "summary",
+    ) -> dict[str, Any]:
+        """Inspect the active timeline and optionally compute visible state at a time.
+
+        Use this tool before requesting expensive visual previews. It returns a
+        lightweight summary by default, and can include the full timeline payload
+        plus time-specific visible-state information when needed.
+
+        Args:
+            time: Optional timeline time in seconds. When provided, returns the
+                active visual stack and related state at that time.
+            detail: "summary" for counts and metadata, or "full" to also include
+                the sorted clip, subtitle, and track payloads.
+
+        Returns:
+            Timeline metadata, optionally full timeline state, and optionally a
+            renderState object describing what should be visible at the given time.
+        """
+        tl = store._active_timeline()  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
+        clips = sorted(tl.clips, key=lambda c: (c.trackIndex, c.startTime))
+        subs = sorted(tl.subtitles, key=lambda s: s.startTime)
+
+        payload: dict[str, Any] = {
+            "timelineId": tl.id,
+            "duration": _timeline_duration(tl),
+            "trackCount": len(tl.tracks),
+            "clipCount": len(tl.clips),
+            "subtitleCount": len(tl.subtitles),
+        }
+        if detail == "full":
+            payload["clips"] = [clip.model_dump() for clip in clips]
+            payload["subtitles"] = [subtitle.model_dump() for subtitle in subs]
+            payload["tracks"] = [track.model_dump() for track in tl.tracks]
+        if time is not None:
+            payload["renderState"] = _inspect_timeline_render_state(tl, max(0.0, time))
+        return payload
+
+    @mcp.tool()
+    async def preview_frame(
+        time: float,
+        width: int = 640,
+        height: int = 360,
+    ) -> dict[str, Any]:
+        """Render a still image preview of the active timeline at a given time.
+
+        This asks the Electron desktop app to render the active MCP project in a
+        hidden preview window, then captures a PNG. Use inspect_timeline first
+        when you only need a cheap structural answer.
+
+        Args:
+            time: Timeline time in seconds to capture.
+            width: Output preview width in pixels (default 640).
+            height: Output preview height in pixels (default 360).
+
+        Returns:
+            {"imagePath": str, "time": float, "width": int, "height": int}
+        """
+        project_payload = store.get_active().model_dump()
+        return await asyncio.to_thread(
+            render_preview_frame,
+            project_payload=project_payload,
+            time=max(0.0, time),
+            width=max(64, width),
+            height=max(64, height),
+        )
+
+    @mcp.tool()
+    async def preview_clip(
+        start_time: float,
+        duration: float = 1.5,
+        width: int = 640,
+        height: int = 360,
+        fps: int = 8,
+    ) -> dict[str, Any]:
+        """Render a short video preview of the active timeline.
+
+        This is more expensive than preview_frame and is meant for checking
+        timing, motion, and dissolve pacing across a short range.
+
+        Args:
+            start_time: Timeline time in seconds at which to start the preview.
+            duration: Preview duration in seconds (default 1.5, max 10).
+            width: Output preview width in pixels (default 640).
+            height: Output preview height in pixels (default 360).
+            fps: Preview frame rate (default 8, max 24).
+
+        Returns:
+            {"videoPath": str, "startTime": float, "duration": float,
+             "fps": int, "frameCount": int, "width": int, "height": int}
+        """
+        project_payload = store.get_active().model_dump()
+        return await asyncio.to_thread(
+            render_preview_clip,
+            project_payload=project_payload,
+            start_time=max(0.0, start_time),
+            duration=max(0.1, min(10.0, duration)),
+            width=max(64, width),
+            height=max(64, height),
+            fps=max(1, min(24, fps)),
+        )
 
     # ── Clip property setters ──────────────────────────────────────────────────
 

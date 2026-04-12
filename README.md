@@ -181,34 +181,45 @@ Building installers:
 
 ## AI Assistant / MCP Setup
 
-This repo does not ship a custom MCP server. If you use an MCP-compatible coding assistant, the main thing you need is filesystem access to the repo root so the assistant can read the project guidance and source files.
+LTX Desktop ships with a built-in MCP server in the Python backend. Start the desktop app first, then connect your MCP client to the local endpoint exposed by the running app.
 
-Project guidance files:
+Default MCP endpoints:
+
+- Streamable HTTP: `http://127.0.0.1:8765/mcp`
+- SSE: `http://127.0.0.1:8765/mcp-sse`
+
+The MCP endpoints are localhost-only and do not require auth.
+
+Example MCP configuration for clients that accept a remote HTTP MCP server URL:
+
+```json
+{
+  "mcpServers": {
+    "ltx-desktop": {
+      "url": "http://127.0.0.1:8765/mcp"
+    }
+  }
+}
+```
+
+Some MCP clients also require an explicit transport selector. In those clients, use `streamable_http` with the same URL above.
+
+You can verify the app-side server is up with:
+
+```bash
+curl http://127.0.0.1:8765/health
+npx @modelcontextprotocol/inspector http://127.0.0.1:8765/mcp
+```
+
+Repository guidance files:
 
 - [`AGENTS.md`](AGENTS.md) - shared repo instructions
 - [`.codex/skills/ltx-video-editor-development/SKILL.md`](.codex/skills/ltx-video-editor-development/SKILL.md) - Codex skill entrypoint
 - [`.claude/skills/video-editor-development/SKILL.md`](.claude/skills/video-editor-development/SKILL.md) - Claude skill entrypoint
 - [`.cursor/skills/video-editor-development/SKILL.md`](.cursor/skills/video-editor-development/SKILL.md) - Cursor skill entrypoint
 - [`docs/skills/video-editor-development.md`](docs/skills/video-editor-development.md) - shared editor architecture guidance
-
-Example filesystem MCP configuration:
-
-```json
-{
-  "mcpServers": {
-    "ltx-desktop-workspace": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-filesystem",
-        "/absolute/path/to/LTX-Desktop"
-      ]
-    }
-  }
-}
-```
-
-Replace `"/absolute/path/to/LTX-Desktop"` with your local clone path, then restart your MCP client so it reloads the server config.
+- [`docs/AGENT_PREVIEW_TOOLING_PLAN.md`](docs/AGENT_PREVIEW_TOOLING_PLAN.md) - architecture plan for agent timeline inspection and preview tools
+- [`docs/AGENT_PREVIEW_TOOLING_CHECKLIST.md`](docs/AGENT_PREVIEW_TOOLING_CHECKLIST.md) - execution checklist for implementing the preview tooling roadmap
 
 ## Telemetry
 

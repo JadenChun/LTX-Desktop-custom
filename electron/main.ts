@@ -10,6 +10,7 @@ import { registerFileHandlers } from './ipc/file-handlers'
 import { registerLogHandlers } from './ipc/log-handlers'
 import { registerVideoProcessingHandlers } from './ipc/video-processing-handlers'
 import { initSessionLog } from './logging-management'
+import { ensurePreviewBridgeServer, stopPreviewBridgeServer } from './preview/preview-service'
 import { stopPythonBackend } from './python-backend'
 import { initAutoUpdater } from './updater'
 import { createWindow, getMainWindow } from './window'
@@ -56,6 +57,7 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     setupCSP()
+    await ensurePreviewBridgeServer()
     // Ensure outputs directory exists for imported media files
     const outputsDir = path.join(process.cwd(), 'outputs')
     if (!fs.existsSync(outputsDir)) {
@@ -86,5 +88,6 @@ if (!gotLock) {
   app.on('before-quit', () => {
     stopExportProcess()
     stopPythonBackend()
+    void stopPreviewBridgeServer()
   })
 }
