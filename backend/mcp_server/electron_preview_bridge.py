@@ -64,15 +64,19 @@ def render_preview_frame(
     time: float,
     width: int,
     height: int,
+    output_path: str | None = None,
 ) -> dict[str, Any]:
+    payload = {
+        "project": project_payload,
+        "time": time,
+        "width": width,
+        "height": height,
+    }
+    if output_path:
+        payload["outputPath"] = output_path
     return _bridge_post(
         "/preview/frame",
-        {
-            "project": project_payload,
-            "time": time,
-            "width": width,
-            "height": height,
-        },
+        payload,
     )
 
 
@@ -84,15 +88,19 @@ def render_preview_clip(
     width: int,
     height: int,
     fps: int,
+    output_path: str | None = None,
 ) -> dict[str, Any]:
+    payload = {
+        "project": project_payload,
+        "startTime": start_time,
+        "duration": duration,
+        "width": width,
+        "height": height,
+        "fps": fps,
+    }
+    if output_path:
+        payload["outputPath"] = output_path
     return _bridge_post(
         "/preview/clip",
-        {
-            "project": project_payload,
-            "startTime": start_time,
-            "duration": duration,
-            "width": width,
-            "height": height,
-            "fps": fps,
-        },
+        payload,
     )

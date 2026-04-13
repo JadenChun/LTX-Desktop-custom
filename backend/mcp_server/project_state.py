@@ -785,6 +785,32 @@ class ProjectStore:
                     return sub
             raise KeyError(f"Subtitle not found: {subtitle_id}")
 
+    def set_subtitle_track_style(self, track_index: int, **style_kwargs: object) -> list[SubtitleClip]:
+        with self._lock:
+            tl = self._active_timeline()
+            updated: list[SubtitleClip] = []
+            normalized_style = {
+                key: value
+                for key, value in style_kwargs.items()
+                if hasattr(SubtitleStyle(), key)
+            }
+            for sub in tl.subtitles:
+                if sub.trackIndex != track_index:
+                    continue
+                if sub.style is None:
+                    sub.style = SubtitleStyle()
+                for key, value in normalized_style.items():
+                    setattr(sub.style, key, value)
+                updated.append(sub)
+
+            if 0 <= track_index < len(tl.tracks):
+                existing = tl.tracks[track_index].subtitleStyle or {}
+                tl.tracks[track_index].subtitleStyle = {**existing, **normalized_style}
+
+            info = self._touch()
+        self._notify(info)
+        return updated
+
     def get_subtitles(self) -> list[SubtitleClip]:
         with self._lock:
             return list(self._active_timeline().subtitles)

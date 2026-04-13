@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from mcp.server.fastmcp import FastMCP
 
 from mcp_server.project_state import ProjectStore
+from mcp_server.tool_annotations import build_tool_annotations
 from mcp_server.tools.assets import register_asset_tools
 from mcp_server.tools.ai_generation import register_ai_generation_tools
 from mcp_server.tools.export import register_export_tools
@@ -63,6 +64,13 @@ def _sanitize_tool_schemas(mcp: FastMCP) -> None:
         tool.parameters = _remove_null_defaults(tool.parameters)
 
 
+def _apply_tool_annotations(mcp: FastMCP) -> None:
+    """Apply consistent MCP annotations across all registered tools."""
+    for tool in mcp._tool_manager.list_tools():  # noqa: SLF001
+        if tool.annotations is None:
+            tool.annotations = build_tool_annotations(tool.name)
+
+
 def get_store() -> ProjectStore:
     """Return the active ProjectStore. Raises if create_mcp_server was not called."""
     if _store is None:
@@ -94,6 +102,7 @@ def create_mcp_server(handler: "AppHandler") -> FastMCP:
     register_text_overlay_tools(mcp, _store)
     register_ai_generation_tools(mcp, handler)
     register_export_tools(mcp, _store)
+    _apply_tool_annotations(mcp)
     _sanitize_tool_schemas(mcp)
 
     logger.info("MCP server created — %d tools registered", len(mcp._tool_manager._tools))  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]

@@ -152,6 +152,59 @@ def register_subtitle_tools(mcp: FastMCP, store: "ProjectStore") -> None:
         return sub.model_dump()
 
     @mcp.tool()
+    async def set_subtitle_track_style(
+        track_index: int = 0,
+        font_size: float | None = None,
+        font_family: str | None = None,
+        font_weight: str | None = None,
+        color: str | None = None,
+        background_color: str | None = None,
+        position: str | None = None,
+        italic: bool | None = None,
+    ) -> dict[str, Any]:
+        """Apply one subtitle style to every subtitle on a track.
+
+        This is the preferred way to normalize caption appearance for an edit
+        pass. Only the provided style keys are changed.
+
+        Args:
+            track_index:      Subtitle track index to update (default 0).
+            font_size:        Font size in pixels.
+            font_family:      CSS font family string.
+            font_weight:      "normal" or "bold".
+            color:            Text color as CSS value.
+            background_color: Background color (e.g. "rgba(0,0,0,0.6)").
+            position:         "bottom", "top", or "center".
+            italic:           True/False.
+
+        Returns:
+            {"ok": true, "track_index": int, "updated_count": int, "subtitles": [...]}
+        """
+        kwargs: dict[str, object] = {}
+        if font_size is not None:
+            kwargs["fontSize"] = font_size
+        if font_family is not None:
+            kwargs["fontFamily"] = font_family
+        if font_weight is not None:
+            kwargs["fontWeight"] = font_weight
+        if color is not None:
+            kwargs["color"] = color
+        if background_color is not None:
+            kwargs["backgroundColor"] = background_color
+        if position is not None:
+            kwargs["position"] = position
+        if italic is not None:
+            kwargs["italic"] = italic
+
+        updated = store.set_subtitle_track_style(track_index, **kwargs)
+        return {
+            "ok": True,
+            "track_index": track_index,
+            "updated_count": len(updated),
+            "subtitles": [sub.model_dump() for sub in updated],
+        }
+
+    @mcp.tool()
     async def split_subtitle_progressive(
         subtitle_id: str,
         words_per_chunk: int = 4,

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from mcp_server.project_state import ProjectStore
-from mcp_server.tools.timeline import _inspect_timeline_render_state
+from mcp_server.tools.timeline import (
+    _build_track_summary,
+    _inspect_timeline_render_state,
+    _primary_visible_video_track,
+)
 
 
 def test_inspect_timeline_render_state_returns_active_visual_stack(tmp_path):
@@ -24,6 +28,13 @@ def test_inspect_timeline_render_state_returns_active_visual_stack(tmp_path):
     assert [clip["id"] for clip in render_state["compositingStack"]] == [bg_clip.id]
     assert [clip["id"] for clip in render_state["activeTextClips"]] == [text_clip.id]
     assert [cue["id"] for cue in render_state["activeSubtitles"]] == [subtitle.id]
+
+    summary = _build_track_summary(timeline)
+    primary_track = _primary_visible_video_track(summary)
+
+    assert primary_track is not None
+    assert primary_track["index"] == 1
+    assert summary[2]["hasTextOverlays"] is True
 
 
 def test_inspect_timeline_render_state_reports_dissolve_and_letterbox(tmp_path):

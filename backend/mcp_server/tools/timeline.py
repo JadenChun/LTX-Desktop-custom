@@ -316,6 +316,38 @@ def _timeline_duration(timeline: "Timeline") -> float:
     return duration
 
 
+def _build_track_summary(timeline: "Timeline") -> list[dict[str, Any]]:
+    summary: list[dict[str, Any]] = []
+    for track_index, track in enumerate(timeline.tracks):
+        clips = [clip for clip in timeline.clips if clip.trackIndex == track_index]
+        subtitles = [subtitle for subtitle in timeline.subtitles if subtitle.trackIndex == track_index]
+        visual_media = [
+            clip for clip in clips
+            if clip.type in {"video", "image"} and clip.assetId is not None
+        ]
+        summary.append({
+            "index": track_index,
+            "id": track.id,
+            "name": track.name,
+            "kind": track.kind,
+            "type": track.type,
+            "enabled": track.enabled,
+            "muted": track.muted,
+            "clipCount": len(clips),
+            "subtitleCount": len(subtitles),
+            "hasVisualMedia": bool(visual_media),
+            "hasTextOverlays": any(clip.type == "text" for clip in clips),
+        })
+    return summary
+
+
+def _primary_visible_video_track(summary: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for track in reversed(summary):
+        if track["enabled"] and track["hasVisualMedia"]:
+            return track
+    return None
+
+
 def register_timeline_tools(mcp: FastMCP, store: "ProjectStore") -> None:
     """Register timeline tools on the MCP server."""
 
@@ -425,11 +457,17 @@ def register_timeline_tools(mcp: FastMCP, store: "ProjectStore") -> None:
         tl = store._active_timeline()  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
         clips = sorted(tl.clips, key=lambda c: (c.trackIndex, c.startTime))
         subs = sorted(tl.subtitles, key=lambda s: s.startTime)
+        track_summary = _build_track_summary(tl)
+        primary_track = _primary_visible_video_track(track_summary)
         return {
             "timelineId": tl.id,
+            "duration": _timeline_duration(tl),
             "clips": [c.model_dump() for c in clips],
             "subtitles": [s.model_dump() for s in subs],
             "tracks": [t.model_dump() for t in tl.tracks],
+            "trackSummary": track_summary,
+            "primaryVisibleVideoTrackIndex": primary_track["index"] if primary_track else None,
+            "primaryVisibleVideoTrackName": primary_track["name"] if primary_track else None,
         }
 
     @mcp.tool()
@@ -456,6 +494,8 @@ def register_timeline_tools(mcp: FastMCP, store: "ProjectStore") -> None:
         tl = store._active_timeline()  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
         clips = sorted(tl.clips, key=lambda c: (c.trackIndex, c.startTime))
         subs = sorted(tl.subtitles, key=lambda s: s.startTime)
+        track_summary = _build_track_summary(tl)
+        primary_track = _primary_visible_video_track(track_summary)
 
         payload: dict[str, Any] = {
             "timelineId": tl.id,
@@ -463,6 +503,9 @@ def register_timeline_tools(mcp: FastMCP, store: "ProjectStore") -> None:
             "trackCount": len(tl.tracks),
             "clipCount": len(tl.clips),
             "subtitleCount": len(tl.subtitles),
+            "trackSummary": track_summary,
+            "primaryVisibleVideoTrackIndex": primary_track["index"] if primary_track else None,
+            "primaryVisibleVideoTrackName": primary_track["name"] if primary_track else None,
         }
         if detail == "full":
             payload["clips"] = [clip.model_dump() for clip in clips]
@@ -470,6 +513,11 @@ def register_timeline_tools(mcp: FastMCP, store: "ProjectStore") -> None:
             payload["tracks"] = [track.model_dump() for track in tl.tracks]
         if time is not None:
             payload["renderState"] = _inspect_timeline_render_state(tl, max(0.0, time))
+            payload["renderState"]["primaryVisibleVideoTrackIndex"] = (
+                payload["renderState"]["activeClip"]["trackIndex"]
+                if payload["renderState"]["activeClip"] is not None
+                else payload["primaryVisibleVideoTrackIndex"]
+            )
         return payload
 
     @mcp.tool()
