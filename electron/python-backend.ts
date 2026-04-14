@@ -421,6 +421,83 @@ export async function startPythonBackend(): Promise<void> {
   }
 }
 
+async function waitForManagedProcessExit(
+  managedProcess: ChildProcess,
+  timeoutMs: number,
+): Promise<void> {
+  if (managedProcess.exitCode !== null) {
+    return
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup()
+      reject(new Error('Timed out waiting for Python backend to stop'))
+    }, timeoutMs)
+
+    const handleExit = () => {
+      cleanup()
+      resolve()
+    }
+
+    const cleanup = () => {
+      clearTimeout(timeout)
+      managedProcess.removeListener('exit', handleExit)
+    }
+
+    managedProcess.once('exit', handleExit)
+  })
+}
+
+export async function restartPythonBackend(): Promise<void> {
+  publishBackendHealthStatus({ status: 'restarting' })
+
+  if (backendOwnership === 'adopted') {
+    const shutdownRequested = await requestAdoptedBackendShutdown()
+    if (!shutdownRequested) {
+      publishBackendHealthStatus({ status: 'dead' })
+      throw new Error('Failed to request shutdown for adopted backend')
+    }
+
+    const backendStopped = await waitUntilBackendDown()
+    if (!backendStopped) {
+      publishBackendHealthStatus({ status: 'dead' })
+      throw new Error('Timed out waiting for adopted backend shutdown')
+    }
+
+    backendOwnership = null
+    backendUrl = null
+    authToken = null
+    adminToken = null
+    latestBackendHealthStatus = null
+    await startPythonBackend()
+    return
+  }
+
+  const managedProcess = pythonProcess
+  if (managedProcess) {
+    isIntentionalShutdown = true
+    logger.info('Restarting Python backend...')
+    const pid = managedProcess.pid
+    managedProcess.kill('SIGTERM')
+
+    if (pid) {
+      setTimeout(() => {
+        try {
+          process.kill(pid, 0)
+          process.kill(pid, 'SIGKILL')
+        } catch {
+          // Already dead.
+        }
+      }, 5000)
+    }
+
+    await waitForManagedProcessExit(managedProcess, 8000)
+  }
+
+  await startPythonBackend()
+}
+
 export function stopPythonBackend(): void {
   if (pythonProcess) {
     isIntentionalShutdown = true

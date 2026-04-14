@@ -484,11 +484,12 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
         }
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
         const saved = await resp.json() as Project
-        const serverUpdatedAt = saved.updatedAt
+        const imported = recoverAssetUrls(migrateProject(saved))
+        const serverUpdatedAt = imported.updatedAt
 
         setProjects(prev => prev.map(p => (
           p.id === projectId
-            ? { ...p, updatedAt: serverUpdatedAt, mcpLastUpdatedAt: serverUpdatedAt }
+            ? { ...imported, mcpLastUpdatedAt: serverUpdatedAt }
             : p
         )))
 

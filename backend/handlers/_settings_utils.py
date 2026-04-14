@@ -85,4 +85,42 @@ def migrate_legacy_settings(raw: Mapping[str, JSONValue]) -> JSONObject:
         migrated.setdefault("prompt_enhancer_enabled_i2v", legacy_value)
 
     migrated.pop("prompt_enhancer_enabled", None)
+
+    legacy_module_key = "mcp_ai_generation_tools_enabled"
+    legacy_tool_keys = {
+        "mcp_ai_generate_video_enabled": "generate_video",
+        "mcp_ai_retake_clip_enabled": "ai_retake_clip",
+        "mcp_ai_fill_gap_enabled": "fill_gap",
+        "mcp_ai_get_generation_status_enabled": "get_generation_status",
+        "mcp_ai_cancel_generation_enabled": "cancel_generation",
+    }
+
+    has_legacy_mcp_settings = legacy_module_key in migrated or any(
+        key in migrated for key in legacy_tool_keys
+    )
+
+    if has_legacy_mcp_settings:
+        raw_modules = migrated.get("mcp_modules")
+        mcp_modules = dict(raw_modules) if _is_json_object(raw_modules) else {}
+        if legacy_module_key in migrated:
+            mcp_modules.setdefault("ai_generation", bool(migrated[legacy_module_key]))
+        if mcp_modules:
+            migrated["mcp_modules"] = mcp_modules
+
+        raw_tools = migrated.get("mcp_tools")
+        mcp_tools = dict(raw_tools) if _is_json_object(raw_tools) else {}
+        raw_ai_tools = mcp_tools.get("ai_generation")
+        ai_tools = dict(raw_ai_tools) if _is_json_object(raw_ai_tools) else {}
+
+        for legacy_key, tool_name in legacy_tool_keys.items():
+            if legacy_key in migrated:
+                ai_tools.setdefault(tool_name, bool(migrated[legacy_key]))
+
+        if ai_tools:
+            mcp_tools["ai_generation"] = ai_tools
+            migrated["mcp_tools"] = mcp_tools
+
+    migrated.pop(legacy_module_key, None)
+    for legacy_key in legacy_tool_keys:
+        migrated.pop(legacy_key, None)
     return migrated

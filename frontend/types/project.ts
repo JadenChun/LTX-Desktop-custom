@@ -82,6 +82,8 @@ export interface SubtitleStyle {
   italic: boolean
   highlightEnabled: boolean // progressive word-by-word highlight
   highlightColor: string // hex color for highlighted words
+  progressiveMode: boolean // auto-split subtitles into sequential chunks
+  wordsPerChunk: number // max words per chunk when progressive mode is enabled
 }
 
 export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
@@ -94,6 +96,8 @@ export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
   italic: false,
   highlightEnabled: false,
   highlightColor: '#FFDD00',
+  progressiveMode: false,
+  wordsPerChunk: 4,
 }
 
 // A single subtitle cue on the timeline

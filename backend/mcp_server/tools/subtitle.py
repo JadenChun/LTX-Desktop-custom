@@ -161,14 +161,23 @@ def register_subtitle_tools(mcp: FastMCP, store: "ProjectStore") -> None:
         background_color: str | None = None,
         position: str | None = None,
         italic: bool | None = None,
+        progressive_mode: bool | None = None,
+        words_per_chunk: int | None = None,
     ) -> dict[str, Any]:
-        """Apply one subtitle style to every subtitle on a track.
+        """Configure style and behaviour for a subtitle track.
 
-        This is the preferred way to normalize caption appearance for an edit
-        pass. Only the provided style keys are changed.
+        Applies visual style to every existing subtitle on the track.
+        Also sets track-level behaviour that affects future add_subtitle calls:
+
+        - progressive_mode=True  — each new subtitle is automatically split into
+          short word-chunk clips (TikTok / Reels-style captions).
+        - words_per_chunk        — max words per chunk when progressive_mode is on
+          (default 4).
+
+        Only the provided keys are changed.
 
         Args:
-            track_index:      Subtitle track index to update (default 0).
+            track_index:      Subtitle track ordinal to update (default 0).
             font_size:        Font size in pixels.
             font_family:      CSS font family string.
             font_weight:      "normal" or "bold".
@@ -176,6 +185,8 @@ def register_subtitle_tools(mcp: FastMCP, store: "ProjectStore") -> None:
             background_color: Background color (e.g. "rgba(0,0,0,0.6)").
             position:         "bottom", "top", or "center".
             italic:           True/False.
+            progressive_mode: Auto-split new subtitles into word chunks.
+            words_per_chunk:  Max words per chunk (default 4).
 
         Returns:
             {"ok": true, "track_index": int, "updated_count": int, "subtitles": [...]}
@@ -195,6 +206,10 @@ def register_subtitle_tools(mcp: FastMCP, store: "ProjectStore") -> None:
             kwargs["position"] = position
         if italic is not None:
             kwargs["italic"] = italic
+        if progressive_mode is not None:
+            kwargs["progressiveMode"] = progressive_mode
+        if words_per_chunk is not None:
+            kwargs["wordsPerChunk"] = words_per_chunk
 
         updated = store.set_subtitle_track_style(track_index, **kwargs)
         return {
@@ -204,90 +219,6 @@ def register_subtitle_tools(mcp: FastMCP, store: "ProjectStore") -> None:
             "subtitles": [sub.model_dump() for sub in updated],
         }
 
-    @mcp.tool()
-    async def split_subtitle_progressive(
-        subtitle_id: str,
-        words_per_chunk: int = 4,
-    ) -> list[dict[str, Any]]:
-        """Split a long subtitle into short progressive chunks that appear one
-        after another — like TikTok / Reels captions.
-
-        Each chunk gets a proportional time slice based on character count,
-        so longer phrases get more screen time.
-
-        Args:
-            subtitle_id:     The subtitle id to split.
-            words_per_chunk: Maximum words per chunk (default 4).
-
-        Returns:
-            List of the new SubtitleClip dicts that replaced the original.
-        """
-        import math
-
-        subs = store.get_subtitles()
-        original = next((s for s in subs if s.id == subtitle_id), None)
-        if original is None:
-            return [{"error": f"Subtitle {subtitle_id} not found"}]
-
-        words = original.text.strip().split()
-        if len(words) <= words_per_chunk:
-            return [original.model_dump()]
-
-        # Build chunks
-        chunks: list[str] = []
-        for i in range(0, len(words), words_per_chunk):
-            chunks.append(" ".join(words[i : i + words_per_chunk]))
-
-        total_duration = original.endTime - original.startTime
-        total_chars = sum(len(c) for c in chunks)
-
-        # Remove original
-        store.remove_subtitle(subtitle_id)
-
-        # Create new progressive chunks
-        new_subs: list[dict[str, Any]] = []
-        cursor = original.startTime
-        for i, chunk_text in enumerate(chunks):
-            chunk_duration = total_duration * (len(chunk_text) / total_chars)
-            end = original.endTime if i == len(chunks) - 1 else cursor + chunk_duration
-            sub = store.add_subtitle(
-                text=chunk_text,
-                start_time=round(cursor, 3),
-                end_time=round(end, 3),
-                track_index=original.trackIndex,
-                style=original.style or {},
-            )
-            new_subs.append(sub.model_dump())
-            cursor = end
-
-        return new_subs
-
-    @mcp.tool()
-    async def split_all_subtitles_progressive(
-        track_index: int = 0,
-        words_per_chunk: int = 4,
-    ) -> dict[str, Any]:
-        """Split ALL subtitles on a track into short progressive chunks.
-
-        Subtitles that already have ≤ words_per_chunk words are left unchanged.
-
-        Args:
-            track_index:     Which subtitle track to process (default 0).
-            words_per_chunk: Maximum words per chunk (default 4).
-
-        Returns:
-            {"ok": true, "original_count": N, "new_count": M}
-        """
-        subs = [s for s in store.get_subtitles() if s.trackIndex == track_index]
-        subs.sort(key=lambda s: s.startTime)
-        original_count = len(subs)
-
-        ids_to_split = [s.id for s in subs if len(s.text.strip().split()) > words_per_chunk]
-        for sid in ids_to_split:
-            await split_subtitle_progressive(subtitle_id=sid, words_per_chunk=words_per_chunk)
-
-        new_count = len([s for s in store.get_subtitles() if s.trackIndex == track_index])
-        return {"ok": True, "original_count": original_count, "new_count": new_count}
 
     @mcp.tool()
     async def list_subtitles() -> list[dict[str, Any]]:

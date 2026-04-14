@@ -2,6 +2,84 @@
   "keep_models_loaded": true,
   "use_torch_compile": false,
   "load_on_startup": false,
+  "mcp_modules": {
+    "project": true,
+    "assets": true,
+    "timeline": true,
+    "tracks": true,
+    "subtitle": true,
+    "text_overlay": true,
+    "export": true,
+    "ai_generation": false
+  },
+  "mcp_tools": {
+    "project": {
+      "create_project": true,
+      "open_project": true,
+      "save_project": true,
+      "get_project_state": true,
+      "list_projects": true
+    },
+    "assets": {
+      "import_asset": true,
+      "list_assets": true,
+      "get_asset_info": true
+    },
+    "timeline": {
+      "add_clip": true,
+      "remove_clip": true,
+      "move_clip": true,
+      "trim_clip": true,
+      "split_clip": true,
+      "get_timeline_state": true,
+      "inspect_timeline": true,
+      "preview_frame": true,
+      "preview_clip": true,
+      "set_clip_speed": true,
+      "set_clip_volume": true,
+      "set_clip_muted": true,
+      "reverse_clip": true,
+      "set_clip_opacity": true,
+      "flip_clip": true,
+      "set_clip_motion": true,
+      "set_clip_color_correction": true,
+      "set_clip_transition": true,
+      "add_clip_effect": true,
+      "remove_clip_effect": true,
+      "update_clip_effect": true,
+      "update_clip": true,
+      "retake_clip": true
+    },
+    "tracks": {
+      "add_track": true,
+      "remove_track": true,
+      "reorder_track": true,
+      "set_track_properties": true
+    },
+    "subtitle": {
+      "add_subtitle": true,
+      "update_subtitle": true,
+      "remove_subtitle": true,
+      "set_subtitle_style": true,
+      "set_subtitle_track_style": true,
+      "list_subtitles": true
+    },
+    "text_overlay": {
+      "add_text_clip": true,
+      "update_text_clip_style": true
+    },
+    "export": {
+      "export_timeline": true,
+      "get_export_status": true
+    },
+    "ai_generation": {
+      "generate_video": true,
+      "ai_retake_clip": true,
+      "fill_gap": true,
+      "get_generation_status": true,
+      "cancel_generation": true
+    }
+  },
   "ltx_api_key": "",
   "fal_api_key": "",
   "fast_model": {

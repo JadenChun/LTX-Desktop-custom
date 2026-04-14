@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, TypeGuard, TypeVar, cast, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, create_model, field_validator
+from mcp_server.tool_manifest import default_mcp_modules_enabled, default_mcp_tools_enabled
 
 
 def _to_camel_case(field_name: str) -> str:
@@ -62,6 +63,8 @@ class ProModelSettings(SettingsBaseModel):
 class AppSettings(SettingsBaseModel):
     use_torch_compile: bool = False
     load_on_startup: bool = False
+    mcp_modules: dict[str, bool] = Field(default_factory=default_mcp_modules_enabled)
+    mcp_tools: dict[str, dict[str, bool]] = Field(default_factory=default_mcp_tools_enabled)
     ltx_api_key: str = ""
     user_prefers_ltx_api_video_generations: bool = False
     fal_api_key: str = ""
@@ -134,6 +137,8 @@ UpdateSettingsRequest = AppSettingsPatch
 class SettingsResponse(SettingsBaseModel):
     use_torch_compile: bool = False
     load_on_startup: bool = False
+    mcp_modules: dict[str, bool] = Field(default_factory=default_mcp_modules_enabled)
+    mcp_tools: dict[str, dict[str, bool]] = Field(default_factory=default_mcp_tools_enabled)
     has_ltx_api_key: bool = False
     user_prefers_ltx_api_video_generations: bool = False
     has_fal_api_key: bool = False

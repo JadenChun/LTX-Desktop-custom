@@ -246,12 +246,13 @@ function AppContent() {
           <Loader2 className="h-4 w-4 animate-spin" />
           <span className="font-medium">Reconnecting...</span>
         </div>
-        <p className="mt-2 text-sm text-zinc-400">The backend process stopped unexpectedly. Attempting to restart...</p>
+        <p className="mt-2 text-sm text-zinc-400">The backend is restarting. Reconnecting to the app backend...</p>
       </div>
     </div>
   ) : null
 
-  const showGlobalControls = currentView !== 'home' && status.connected && setupState !== 'loading' && !setupState.needsSetup
+  const canOpenSettings = status.connected && setupState !== 'loading' && !setupState.needsSetup
+  const showGlobalControls = currentView !== 'home' && canOpenSettings
   // LTX API key is optional — no upsell modal needed during first run.
 
   const shouldShowGateway = apiGatewayRequest !== null
@@ -447,6 +448,7 @@ function AppContent() {
           setSettingsInitialTab(undefined)
         }}
         initialTab={settingsInitialTab}
+        showProjectSettings={currentView !== 'home'}
       />
       <ApiGatewayModal
         isOpen={shouldShowGateway}

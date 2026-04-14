@@ -110,6 +110,8 @@ class SubtitleStyle(SchemaModel):
     italic: bool = False
     highlightEnabled: bool = False
     highlightColor: str = "#FFDD00"
+    progressiveMode: bool = False   # split added subtitles into word-chunk clips
+    wordsPerChunk: int = 4          # max words per progressive chunk
 
 
 class SubtitleClip(SchemaModel):
@@ -187,6 +189,8 @@ class TimelineClip(SchemaModel):
     reversed: bool = False
     muted: bool = False
     volume: float = 1.0
+    audioFadeInDuration: float = 0.0
+    audioFadeOutDuration: float = 0.0
     trackIndex: int = 0
     asset: Asset | None = None   # embedded copy for the frontend
     importedUrl: str | None = None
@@ -514,6 +518,8 @@ class ProjectStore:
     def trim_clip(self, clip_id: str, trim_start: float, trim_end: float) -> TimelineClip:
         with self._lock:
             clip = self._find_clip(clip_id)
+            if not clip.assetId:
+                raise ValueError(f"Clip {clip_id} (type={clip.type}) has no source asset and cannot be trimmed")
             # trim_end is the out-point in source media, but the frontend
             # trimEnd field means "amount trimmed from the end of the media"
             asset = self.get_asset(clip.assetId)
@@ -531,6 +537,8 @@ class ProjectStore:
             for i, clip in enumerate(tl.clips):
                 if clip.id != clip_id:
                     continue
+                if not clip.assetId:
+                    raise ValueError(f"Clip {clip_id} (type={clip.type}) has no source asset and cannot be split")
                 # trimEnd is "amount trimmed from end", so the media
                 # out-point is (mediaDuration - trimEnd)
                 asset = self.get_asset(clip.assetId)
@@ -718,6 +726,39 @@ class ProjectStore:
 
     # ── Subtitle management ───────────────────────────────────────────────────
 
+    def _ensure_subtitle_track(self, tl: "Timeline", ordinal: int) -> int:
+        """Return the absolute track index of the ordinal-th subtitle track.
+
+        Subtitle tracks are auto-created by appending (never inserting), so
+        existing clip / subtitle trackIndex values are never shifted.
+        ``ordinal=0`` → first subtitle track, ``ordinal=1`` → second, etc.
+        """
+        subtitle_indices = [i for i, t in enumerate(tl.tracks) if t.type == "subtitle"]
+        while len(subtitle_indices) <= ordinal:
+            new_track = Track(
+                id=_new_id("track"),
+                name="Subtitles",
+                kind=None,
+                type="subtitle",
+            )
+            tl.tracks.append(new_track)
+            subtitle_indices.append(len(tl.tracks) - 1)
+        return subtitle_indices[ordinal]
+
+    def resolve_subtitle_track_index(self, ordinal: int) -> int | None:
+        """Return the absolute track index of the ordinal-th subtitle track, or None."""
+        with self._lock:
+            tl = self._active_timeline()
+            subtitle_indices = [i for i, t in enumerate(tl.tracks) if t.type == "subtitle"]
+            return subtitle_indices[ordinal] if ordinal < len(subtitle_indices) else None
+
+    def subtitle_track_ordinal(self, abs_index: int) -> int | None:
+        """Return the ordinal of the subtitle track at abs_index, or None if it's not a subtitle track."""
+        with self._lock:
+            tl = self._active_timeline()
+            subtitle_indices = [i for i, t in enumerate(tl.tracks) if t.type == "subtitle"]
+            return subtitle_indices.index(abs_index) if abs_index in subtitle_indices else None
+
     def add_subtitle(
         self,
         text: str,
@@ -727,18 +768,81 @@ class ProjectStore:
         style: dict[str, Any] | None = None,
     ) -> SubtitleClip:
         with self._lock:
+            tl = self._active_timeline()
+            # track_index is an ordinal among subtitle tracks (0 = first, 1 = second …).
+            # Subtitle tracks are appended as needed so no existing indices shift.
+            actual_index = self._ensure_subtitle_track(tl, track_index)
+            validated_style = SubtitleStyle.model_validate(style) if style else None
+
+            # If the track has progressiveMode enabled, split the text into
+            # word chunks instead of storing one long subtitle.
+            track = tl.tracks[actual_index]
+            track_style_raw = track.subtitleStyle or {}
+            progressive = bool(track_style_raw.get("progressiveMode", False))
+            words_per_chunk = int(track_style_raw.get("wordsPerChunk", 4))
+
+            if progressive:
+                return self._add_subtitle_progressive(
+                    tl, text, start_time, end_time, actual_index, validated_style, words_per_chunk
+                )
+
             sub = SubtitleClip(
                 id=_new_id("sub"),
                 text=text,
                 startTime=start_time,
                 endTime=end_time,
-                trackIndex=track_index,
-                style=SubtitleStyle.model_validate(style) if style else None,
+                trackIndex=actual_index,
+                style=validated_style,
             )
-            self._active_timeline().subtitles.append(sub)
+            tl.subtitles.append(sub)
             info = self._touch()
         self._notify(info)
         return sub
+
+    def _add_subtitle_progressive(
+        self,
+        tl: "Timeline",
+        text: str,
+        start_time: float,
+        end_time: float,
+        actual_index: int,
+        style: SubtitleStyle | None,
+        words_per_chunk: int,
+    ) -> SubtitleClip:
+        """Split text into sequential word-chunk clips (TikTok-style captions).
+
+        Must be called inside the lock. Returns the first chunk clip.
+        """
+        words = text.strip().split()
+        chunks = [
+            " ".join(words[i : i + words_per_chunk])
+            for i in range(0, len(words), words_per_chunk)
+        ] or [text]
+
+        total_duration = end_time - start_time
+        total_chars = sum(len(c) for c in chunks) or 1
+
+        first: SubtitleClip | None = None
+        cursor = start_time
+        for i, chunk_text in enumerate(chunks):
+            chunk_end = end_time if i == len(chunks) - 1 else cursor + total_duration * (len(chunk_text) / total_chars)
+            sub = SubtitleClip(
+                id=_new_id("sub"),
+                text=chunk_text,
+                startTime=round(cursor, 3),
+                endTime=round(chunk_end, 3),
+                trackIndex=actual_index,
+                style=style,
+            )
+            tl.subtitles.append(sub)
+            if first is None:
+                first = sub
+            cursor = chunk_end
+
+        info = self._touch()
+        self._notify(info)
+        assert first is not None
+        return first
 
     def update_subtitle(
         self,
@@ -788,14 +892,26 @@ class ProjectStore:
     def set_subtitle_track_style(self, track_index: int, **style_kwargs: object) -> list[SubtitleClip]:
         with self._lock:
             tl = self._active_timeline()
+            # Resolve ordinal → absolute index (same semantics as add_subtitle).
+            subtitle_indices = [i for i, t in enumerate(tl.tracks) if t.type == "subtitle"]
+            if track_index >= len(subtitle_indices):
+                return []
+            abs_index = subtitle_indices[track_index]
+
+            # Track-level settings (not per-subtitle style) are stored on the track.
+            track_only_keys = {"progressiveMode", "wordsPerChunk"}
+            track_kwargs = {k: v for k, v in style_kwargs.items() if k in track_only_keys}
+            sub_style_kwargs = {k: v for k, v in style_kwargs.items() if k not in track_only_keys}
+
+            # Apply per-subtitle style fields (only recognised SubtitleStyle fields).
             updated: list[SubtitleClip] = []
             normalized_style = {
                 key: value
-                for key, value in style_kwargs.items()
+                for key, value in sub_style_kwargs.items()
                 if hasattr(SubtitleStyle(), key)
             }
             for sub in tl.subtitles:
-                if sub.trackIndex != track_index:
+                if sub.trackIndex != abs_index:
                     continue
                 if sub.style is None:
                     sub.style = SubtitleStyle()
@@ -803,9 +919,9 @@ class ProjectStore:
                     setattr(sub.style, key, value)
                 updated.append(sub)
 
-            if 0 <= track_index < len(tl.tracks):
-                existing = tl.tracks[track_index].subtitleStyle or {}
-                tl.tracks[track_index].subtitleStyle = {**existing, **normalized_style}
+            # Persist all style + track-level fields on the track.
+            existing = tl.tracks[abs_index].subtitleStyle or {}
+            tl.tracks[abs_index].subtitleStyle = {**existing, **normalized_style, **track_kwargs}
 
             info = self._touch()
         self._notify(info)

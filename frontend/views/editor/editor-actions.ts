@@ -46,6 +46,9 @@ import {
   selectTracks,
 } from './editor-selectors'
 import { getEditorModel, updatedProject } from './editor-project-bridging'
+import {
+  createSubtitleEntriesWithProgressiveStyle,
+} from './subtitle-progressive'
 
 export interface PendingClipTakeUpdate {
   assetId: string
@@ -1388,14 +1391,19 @@ export function importSrtCues(state: EditorState, cues: SrtCue[]): EditorState {
     subtitleTrackIndex = 0
   }
 
-  const importedSubtitles: SubtitleClip[] = cues.map(cue => ({
-    id: `${makeId('sub')}-${cue.index}`,
-    text: cue.text,
-    startTime: cue.startTime,
-    endTime: cue.endTime,
-    trackIndex: subtitleTrackIndex,
-    ...(cue.color ? { style: { color: cue.color } } : {}),
-  }))
+  const subtitleTrack = selectTracks(next)[subtitleTrackIndex]
+  const importedSubtitles = cues.flatMap(cue => createSubtitleEntriesWithProgressiveStyle(
+    {
+      id: `${makeId('sub')}-${cue.index}`,
+      text: cue.text,
+      startTime: cue.startTime,
+      endTime: cue.endTime,
+      trackIndex: subtitleTrackIndex,
+      ...(cue.color ? { style: { color: cue.color } } : {}),
+    },
+    subtitleTrack?.subtitleStyle,
+    makeId,
+  ))
 
   return setTimelineSubtitles(next, prev => [
     ...prev.filter(subtitle => subtitle.trackIndex !== subtitleTrackIndex),
@@ -1419,9 +1427,11 @@ export function addSubtitle(state: EditorState, params: AddSubtitleParams): Edit
     endTime: params.endTime ?? (selectCurrentTime(state) + 3),
     trackIndex: params.trackIndex,
   }
+  const trackStyle = selectTracks(state)[params.trackIndex]?.subtitleStyle
+  const nextSubtitles = createSubtitleEntriesWithProgressiveStyle(subtitle, trackStyle, makeId)
   return replaceActiveTimeline(state, timeline => ({
     ...timeline,
-    subtitles: [...(timeline.subtitles || []), subtitle],
+    subtitles: [...(timeline.subtitles || []), ...nextSubtitles],
   }))
 }
 
@@ -1485,7 +1495,6 @@ export function setSubtitleStyleField<K extends keyof SubtitleStyle>(
 export function splitSubtitleProgressive(
   state: EditorState,
   subtitleId: string,
-  wordsPerChunk = 4,
 ): EditorState {
   return replaceActiveTimeline(state, timeline => {
     const subtitles = timeline.subtitles || []
@@ -1493,35 +1502,8 @@ export function splitSubtitleProgressive(
     if (idx === -1) return timeline
 
     const sub = subtitles[idx]
-    const words = sub.text.trim().split(/\s+/).filter(Boolean)
-    if (words.length <= wordsPerChunk) return timeline // Already short enough
-
-    // Build chunks of N words
-    const chunks: string[] = []
-    for (let i = 0; i < words.length; i += wordsPerChunk) {
-      chunks.push(words.slice(i, i + wordsPerChunk).join(' '))
-    }
-
-    const totalDuration = sub.endTime - sub.startTime
-    // Distribute time proportionally by character count (longer chunks get more time)
-    const totalChars = chunks.reduce((sum, c) => sum + c.length, 0)
-
-    const newSubs: SubtitleClip[] = []
-    let cursor = sub.startTime
-
-    for (let i = 0; i < chunks.length; i++) {
-      const chunkDuration = totalDuration * (chunks[i].length / totalChars)
-      const endTime = i === chunks.length - 1 ? sub.endTime : cursor + chunkDuration
-      newSubs.push({
-        id: makeId('sub'),
-        text: chunks[i],
-        startTime: parseFloat(cursor.toFixed(3)),
-        endTime: parseFloat(endTime.toFixed(3)),
-        trackIndex: sub.trackIndex,
-        style: sub.style,
-      })
-      cursor = endTime
-    }
+    const trackStyle = timeline.tracks[sub.trackIndex]?.subtitleStyle
+    const newSubs = createSubtitleEntriesWithProgressiveStyle(sub, trackStyle, makeId, true)
 
     const nextSubtitles = [
       ...subtitles.slice(0, idx),

@@ -12,18 +12,21 @@ When LTX Desktop is running, the backend exposes:
 
 MCP endpoints are localhost-only and currently do not require auth.
 
-## Tools (42 total)
+## Tools
+
+By default, the MCP server registers the editing-focused tool set and leaves AI
+generation MCP tools disabled. Module- and tool-level availability is controlled
+by the app settings `mcp_modules` and `mcp_tools`.
 
 | Group | Tools |
 |-------|-------|
-| **Project** (4) | `create_project`, `open_project`, `save_project`, `get_project_state` |
+| **Project** (5) | `create_project`, `open_project`, `save_project`, `get_project_state`, `list_projects` |
 | **Assets** (3) | `import_asset`, `list_assets`, `get_asset_info` |
-| **Timeline – clip management** (6) | `add_clip`, `remove_clip`, `move_clip`, `trim_clip`, `split_clip`, `get_timeline_state` |
-| **Timeline – inspection** (3) | `inspect_timeline`, `preview_frame`, `preview_clip` |
-| **Timeline – clip properties** (12) | `set_clip_speed`, `set_clip_volume`, `set_clip_muted`, `reverse_clip`, `set_clip_opacity`, `flip_clip`, `set_clip_motion`, `set_clip_color_correction`, `set_clip_transition`, `add_clip_effect`, `remove_clip_effect`, `update_clip_effect` |
-| **Text overlays** (2) | `add_text_clip`, `update_text_clip_style` |
-| **Subtitles** (5) | `add_subtitle`, `update_subtitle`, `remove_subtitle`, `set_subtitle_style`, `list_subtitles` |
-| **AI generation** (5) | `generate_video`, `retake_clip`, `fill_gap`, `get_generation_status`, `cancel_generation` |
+| **Timeline** (23) | `add_clip`, `remove_clip`, `move_clip`, `trim_clip`, `split_clip`, `get_timeline_state`, `inspect_timeline`, `preview_frame`, `preview_clip`, `set_clip_speed`, `set_clip_volume`, `set_clip_muted`, `reverse_clip`, `set_clip_opacity`, `flip_clip`, `set_clip_motion`, `set_clip_color_correction`, `set_clip_transition`, `add_clip_effect`, `remove_clip_effect`, `update_clip_effect`, `update_clip`, `retake_clip` |
+| **Tracks** (4) | `add_track`, `remove_track`, `reorder_track`, `set_track_properties` |
+| **Text clips** (2) | `add_text_clip`, `update_text_clip_style` |
+| **Subtitles** (8) | `add_subtitle`, `update_subtitle`, `remove_subtitle`, `set_subtitle_style`, `set_subtitle_track_style`, `split_subtitle_progressive`, `split_all_subtitles_progressive`, `list_subtitles` |
+| **AI generation** (5, optional) | `generate_video`, `ai_retake_clip`, `fill_gap`, `get_generation_status`, `cancel_generation` |
 | **Export** (2) | `export_timeline`, `get_export_status` |
 
 ## Supported Effects and Transitions
@@ -41,11 +44,17 @@ All fields -100 to 100: `brightness`, `contrast`, `saturation`, `temperature`, `
 **Motion** (`set_clip_motion`):
 Ken Burns-style pan/zoom for **image and video** clips (focus X/Y in 0–100% of frame, scale >= 1).
 
-**Subtitle style** (`set_subtitle_style`):
+**Subtitle style** (`set_subtitle_style`, `set_subtitle_track_style`):
 `font_size`, `font_family`, `font_weight`, `color`, `background_color`, `position` (top/center/bottom), `italic`
 
-**Text overlay style** (`add_text_clip` / `update_text_clip_style`):
+**Text clip style** (`add_text_clip` / `update_text_clip_style`):
 Full rich styling: position X/Y (0–100%), font, size, weight, style, color, background, stroke, shadow, letter spacing, line height, max width, padding, border radius, opacity.
+
+## Tool Selection Guidance
+
+- Use subtitle tools for spoken captions, transcript text, karaoke/progressive captions, and anything that should live on a subtitle track.
+- Use `add_text_clip` for designed editorial text such as titles, lower thirds, labels, and callouts.
+- Do not use text clips to emulate ordinary subtitles unless the user explicitly asks for a graphic overlay treatment instead of subtitle behavior.
 
 ## End-to-End Agent Workflow
 

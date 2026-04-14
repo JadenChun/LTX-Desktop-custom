@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from mcp_server import create_mcp_server
 from mcp_server.project_state import ProjectStore
 from mcp_server.tool_annotations import build_tool_annotations
 from mcp_server.tools.export import _primary_visual_track_index
@@ -47,3 +48,71 @@ def test_set_subtitle_track_style_updates_all_matching_subtitles(tmp_path) -> No
     assert [subtitle.id for subtitle in updated] == [first.id, second.id]
     assert all(subtitle.style is not None and subtitle.style.fontSize == 42.0 for subtitle in updated)
     assert all(subtitle.style is not None and subtitle.style.color == "#FFEE00" for subtitle in updated)
+
+
+def test_create_mcp_server_excludes_ai_generation_tools_by_default(test_state) -> None:
+    server = create_mcp_server(test_state)
+
+    tool_names = {tool.name for tool in server._tool_manager.list_tools()}  # noqa: SLF001
+
+    assert "generate_video" not in tool_names
+    assert "ai_retake_clip" not in tool_names
+    assert "fill_gap" not in tool_names
+    assert "get_generation_status" not in tool_names
+    assert "cancel_generation" not in tool_names
+    assert "retake_clip" in tool_names
+
+
+def test_create_mcp_server_includes_ai_generation_tools_when_enabled(test_state) -> None:
+    test_state.state.app_settings.mcp_modules["ai_generation"] = True
+
+    server = create_mcp_server(test_state)
+
+    tool_names = {tool.name for tool in server._tool_manager.list_tools()}  # noqa: SLF001
+
+    assert "generate_video" in tool_names
+    assert "ai_retake_clip" in tool_names
+    assert "retake_clip" in tool_names
+    assert "fill_gap" in tool_names
+    assert "get_generation_status" in tool_names
+    assert "cancel_generation" in tool_names
+
+
+def test_create_mcp_server_respects_individual_ai_tool_toggles(test_state) -> None:
+    test_state.state.app_settings.mcp_modules["ai_generation"] = True
+    test_state.state.app_settings.mcp_tools["ai_generation"]["generate_video"] = False
+    test_state.state.app_settings.mcp_tools["ai_generation"]["fill_gap"] = False
+
+    server = create_mcp_server(test_state)
+
+    tool_names = {tool.name for tool in server._tool_manager.list_tools()}  # noqa: SLF001
+
+    assert "generate_video" not in tool_names
+    assert "ai_retake_clip" in tool_names
+    assert "fill_gap" not in tool_names
+    assert "get_generation_status" in tool_names
+    assert "cancel_generation" in tool_names
+
+
+def test_create_mcp_server_respects_non_ai_module_toggle(test_state) -> None:
+    test_state.state.app_settings.mcp_modules["text_overlay"] = False
+
+    server = create_mcp_server(test_state)
+
+    tool_names = {tool.name for tool in server._tool_manager.list_tools()}  # noqa: SLF001
+
+    assert "add_text_clip" not in tool_names
+    assert "update_text_clip_style" not in tool_names
+    assert "add_subtitle" in tool_names
+
+
+def test_create_mcp_server_respects_non_ai_tool_toggle(test_state) -> None:
+    test_state.state.app_settings.mcp_tools["timeline"]["preview_clip"] = False
+
+    server = create_mcp_server(test_state)
+
+    tool_names = {tool.name for tool in server._tool_manager.list_tools()}  # noqa: SLF001
+
+    assert "preview_clip" not in tool_names
+    assert "preview_frame" in tool_names
+    assert "add_clip" in tool_names

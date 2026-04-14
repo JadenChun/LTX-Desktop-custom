@@ -184,6 +184,31 @@ export function SubtitleTrackStyleEditor() {
             </div>
           </div>
 
+          {/* Progressive */}
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-zinc-400">Progressive</span>
+            <button
+              onClick={() => updateTrackStyle({ progressiveMode: !style.progressiveMode })}
+              className={`px-2 py-0.5 rounded text-[9px] border ${style.progressiveMode ? 'bg-amber-600/20 text-amber-300 border-amber-500/40' : 'bg-zinc-800 text-zinc-500 border-zinc-700'}`}
+            >
+              {style.progressiveMode ? 'On' : 'Off'}
+            </button>
+          </div>
+
+          {style.progressiveMode && (
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-zinc-400">Words / Chunk</span>
+              <input
+                type="number"
+                min={1}
+                max={12}
+                value={style.wordsPerChunk}
+                onChange={e => updateTrackStyle({ wordsPerChunk: Math.max(1, parseInt(e.target.value, 10) || DEFAULT_SUBTITLE_STYLE.wordsPerChunk) })}
+                className="w-16 bg-zinc-800 border border-zinc-700 rounded px-2 py-0.5 text-[10px] text-white text-center focus:outline-none focus:border-amber-500/50"
+              />
+            </div>
+          )}
+
           <div className="border-t border-zinc-800 pt-3 mt-3">
             <button
               onClick={() => {

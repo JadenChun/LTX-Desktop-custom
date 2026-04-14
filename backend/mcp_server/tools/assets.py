@@ -69,6 +69,29 @@ def register_asset_tools(mcp: FastMCP, store: "ProjectStore") -> None:
                 # imageio probe is best-effort; fall back to empty metadata
                 pass
 
+        elif media_type == "audio":
+            try:
+                import re
+                import subprocess
+
+                import imageio_ffmpeg  # type: ignore[import]
+
+                ffmpeg_exe: str = imageio_ffmpeg.get_ffmpeg_exe()
+                result = subprocess.run(
+                    [ffmpeg_exe, "-i", str(resolved)],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                # ffmpeg -i always exits non-zero with no output file, so parse stderr
+                m = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)", result.stderr)
+                if m:
+                    h, mn, s = m.groups()
+                    duration = int(h) * 3600 + int(mn) * 60 + float(s)
+            except Exception:
+                # probe is best-effort; duration stays None
+                pass
+
         asset = store.add_asset(
             file_path=str(resolved),
             media_type=media_type,

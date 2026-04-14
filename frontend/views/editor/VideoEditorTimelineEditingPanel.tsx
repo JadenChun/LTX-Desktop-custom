@@ -34,6 +34,7 @@ import {
 import {
   applyStateAction,
 } from './editor-actions'
+import { createSubtitleEntriesWithProgressiveStyle } from './subtitle-progressive'
 import {
   selectActiveTimeline,
   selectActiveTimelineInPoint,
@@ -488,10 +489,17 @@ export function VideoEditorTimelineEditingPanel(props: VideoEditorTimelineEditin
       endTime: currentTime + 3,
       trackIndex,
     }
-    setSubtitles(prev => [...prev, subtitle])
-    setSelectedSubtitleId(subtitle.id)
-    setEditingSubtitleId(subtitle.id)
-  }, [currentTime, setEditingSubtitleId, setSelectedSubtitleId, setSubtitles])
+    const trackStyle = tracks[trackIndex]?.subtitleStyle
+    const nextSubtitles = createSubtitleEntriesWithProgressiveStyle(
+      subtitle,
+      trackStyle,
+      (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+    )
+    const nextSelectedSubtitleId = nextSubtitles[0]?.id ?? subtitle.id
+    setSubtitles(prev => [...prev, ...nextSubtitles])
+    setSelectedSubtitleId(nextSelectedSubtitleId)
+    setEditingSubtitleId(nextSelectedSubtitleId)
+  }, [currentTime, setEditingSubtitleId, setSelectedSubtitleId, setSubtitles, tracks])
 
   const addCrossDissolve = useCallback((leftClipId: string, rightClipId: string) => {
     const leftClip = clips.find(clip => clip.id === leftClipId)

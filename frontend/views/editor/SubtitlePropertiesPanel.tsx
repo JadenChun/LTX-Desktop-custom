@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { MessageSquare, Trash2, SplitSquareVertical } from 'lucide-react'
 import type { SubtitleStyle } from '../../types/project'
 import { DEFAULT_SUBTITLE_STYLE } from '../../types/project'
+import { resolveSubtitleProgressiveSettings } from './subtitle-progressive'
 import {
   selectSelectedSubtitleId,
   selectSubtitles,
@@ -27,6 +28,12 @@ export function SubtitlePropertiesPanel() {
     }
   }, [selectedSub, tracks])
   const subStyle = { ...DEFAULT_SUBTITLE_STYLE, ...trackStyle, ...selectedSub.style }
+  const { wordsPerChunk } = resolveSubtitleProgressiveSettings(selectedSub.style, tracks[selectedSub.trackIndex]?.subtitleStyle)
+  const wordCount = selectedSub.text.trim().split(/\s+/).filter(Boolean).length
+  const estimatedChunks = Math.ceil(wordCount / wordsPerChunk)
+  const updateSubtitleStyle = (patch: Partial<SubtitleStyle>) => {
+    updateSubtitle(selectedSub.id, { style: { ...selectedSub.style, ...patch } })
+  }
 
   return (
     <div className="h-full border-l border-zinc-800 bg-zinc-900 p-4 overflow-auto">
@@ -103,19 +110,47 @@ export function SubtitlePropertiesPanel() {
           </div>
 
           {/* Progressive Split */}
-          {selectedSub.text.trim().split(/\s+/).length > 4 && (
+          <div>
+            <label className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold mb-1.5 block">Progressive</label>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-zinc-400">Mode</span>
+                <button
+                  onClick={() => updateSubtitleStyle({ progressiveMode: !subStyle.progressiveMode })}
+                  className={`px-2 py-0.5 rounded text-[9px] border ${subStyle.progressiveMode ? 'bg-amber-600/20 text-amber-300 border-amber-500/40' : 'bg-zinc-800 text-zinc-500 border-zinc-700'}`}
+                >
+                  {subStyle.progressiveMode ? 'On' : 'Off'}
+                </button>
+              </div>
+              {subStyle.progressiveMode && (
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] text-zinc-400">Words / Chunk</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={12}
+                    value={subStyle.wordsPerChunk}
+                    onChange={(e) => updateSubtitleStyle({ wordsPerChunk: Math.max(1, parseInt(e.target.value, 10) || DEFAULT_SUBTITLE_STYLE.wordsPerChunk) })}
+                    onKeyDown={(e) => e.stopPropagation()}
+                    className="w-16 bg-zinc-800 border border-zinc-700 rounded px-2 py-0.5 text-[10px] text-white text-center focus:outline-none focus:border-amber-500/50"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+
+          {wordCount > wordsPerChunk && (
             <div>
-              <label className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold mb-1.5 block">Progressive</label>
               <button
                 onClick={() => splitSubtitleProgressive(selectedSub.id)}
                 className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium bg-amber-600/20 text-amber-300 border border-amber-500/30 hover:bg-amber-600/30 hover:border-amber-500/50 transition-colors"
-                title="Split this subtitle into short progressive chunks (~4 words each) that appear one after another, like TikTok/Reels captions"
+                title={`Split this subtitle into short progressive chunks (~${wordsPerChunk} words each) that appear one after another, like TikTok/Reels captions`}
               >
                 <SplitSquareVertical className="h-3.5 w-3.5" />
-                Split into progressive chunks
+                Apply progressive split
               </button>
               <span className="text-[9px] text-zinc-600 mt-1 block">
-                {selectedSub.text.trim().split(/\s+/).length} words → ~{Math.ceil(selectedSub.text.trim().split(/\s+/).length / 4)} chunks
+                {wordCount} words → ~{estimatedChunks} chunks at {wordsPerChunk} words each
               </span>
             </div>
           )}
@@ -132,7 +167,7 @@ export function SubtitlePropertiesPanel() {
                   min={12}
                   max={96}
                   value={subStyle.fontSize}
-                  onChange={(e) => updateSubtitle(selectedSub.id, { style: { ...selectedSub.style, fontSize: parseInt(e.target.value) || 32 } })}
+                  onChange={(e) => updateSubtitleStyle({ fontSize: parseInt(e.target.value) || 32 })}
                   onKeyDown={(e) => e.stopPropagation()}
                   className="w-16 bg-zinc-800 border border-zinc-700 rounded px-2 py-0.5 text-[10px] text-white text-center focus:outline-none focus:border-amber-500/50"
                 />
@@ -141,13 +176,13 @@ export function SubtitlePropertiesPanel() {
               {/* Bold / Italic */}
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => updateSubtitle(selectedSub.id, { style: { ...selectedSub.style, fontWeight: subStyle.fontWeight === 'bold' ? 'normal' : 'bold' } })}
+                  onClick={() => updateSubtitleStyle({ fontWeight: subStyle.fontWeight === 'bold' ? 'normal' : 'bold' })}
                   className={`px-2.5 py-1 rounded text-[10px] font-bold ${subStyle.fontWeight === 'bold' ? 'bg-amber-600/30 text-amber-300 border border-amber-500/40' : 'bg-zinc-800 text-zinc-400 border border-zinc-700'}`}
                 >
                   B
                 </button>
                 <button
-                  onClick={() => updateSubtitle(selectedSub.id, { style: { ...selectedSub.style, italic: !subStyle.italic } })}
+                  onClick={() => updateSubtitleStyle({ italic: !subStyle.italic })}
                   className={`px-2.5 py-1 rounded text-[10px] italic ${subStyle.italic ? 'bg-amber-600/30 text-amber-300 border border-amber-500/40' : 'bg-zinc-800 text-zinc-400 border border-zinc-700'}`}
                 >
                   I
@@ -160,7 +195,7 @@ export function SubtitlePropertiesPanel() {
                 <input
                   type="color"
                   value={subStyle.color}
-                  onChange={(e) => updateSubtitle(selectedSub.id, { style: { ...selectedSub.style, color: e.target.value } })}
+                  onChange={(e) => updateSubtitleStyle({ color: e.target.value })}
                   className="w-7 h-6 rounded cursor-pointer border border-zinc-700"
                 />
               </div>
@@ -170,9 +205,7 @@ export function SubtitlePropertiesPanel() {
                 <span className="text-[10px] text-zinc-400">Background</span>
                 <div className="flex items-center gap-1.5">
                   <button
-                    onClick={() => updateSubtitle(selectedSub.id, {
-                      style: { ...selectedSub.style, backgroundColor: subStyle.backgroundColor === 'transparent' ? '#000000AA' : 'transparent' }
-                    })}
+                    onClick={() => updateSubtitleStyle({ backgroundColor: subStyle.backgroundColor === 'transparent' ? '#000000AA' : 'transparent' })}
                     className={`px-2 py-0.5 rounded text-[9px] border ${
                       subStyle.backgroundColor !== 'transparent'
                         ? 'bg-amber-600/20 text-amber-300 border-amber-500/40'
@@ -185,7 +218,7 @@ export function SubtitlePropertiesPanel() {
                     <input
                       type="color"
                       value={subStyle.backgroundColor.slice(0, 7)}
-                      onChange={(e) => updateSubtitle(selectedSub.id, { style: { ...selectedSub.style, backgroundColor: e.target.value + 'CC' } })}
+                      onChange={(e) => updateSubtitleStyle({ backgroundColor: e.target.value + 'CC' })}
                       className="w-7 h-6 rounded cursor-pointer border border-zinc-700"
                     />
                   )}
@@ -197,7 +230,7 @@ export function SubtitlePropertiesPanel() {
                 <span className="text-[10px] text-zinc-400">Position</span>
                 <select
                   value={subStyle.position}
-                  onChange={(e) => updateSubtitle(selectedSub.id, { style: { ...selectedSub.style, position: e.target.value as SubtitleStyle['position'] } })}
+                  onChange={(e) => updateSubtitleStyle({ position: e.target.value as SubtitleStyle['position'] })}
                   className="bg-zinc-800 border border-zinc-700 rounded px-2 py-0.5 text-[10px] text-white focus:outline-none focus:border-amber-500/50"
                 >
                   <option value="bottom">Bottom</option>
@@ -211,7 +244,7 @@ export function SubtitlePropertiesPanel() {
                 <span className="text-[10px] text-zinc-400">Highlight</span>
                 <div className="flex items-center gap-1.5">
                   <button
-                    onClick={() => updateSubtitle(selectedSub.id, { style: { ...selectedSub.style, highlightEnabled: !subStyle.highlightEnabled } })}
+                    onClick={() => updateSubtitleStyle({ highlightEnabled: !subStyle.highlightEnabled })}
                     className={`px-2 py-0.5 rounded text-[9px] border ${subStyle.highlightEnabled ? 'bg-amber-600/20 text-amber-300 border-amber-500/40' : 'bg-zinc-800 text-zinc-500 border-zinc-700'}`}
                   >
                     {subStyle.highlightEnabled ? 'On' : 'Off'}
@@ -220,7 +253,7 @@ export function SubtitlePropertiesPanel() {
                     <input
                       type="color"
                       value={subStyle.highlightColor || '#FFDD00'}
-                      onChange={(e) => updateSubtitle(selectedSub.id, { style: { ...selectedSub.style, highlightColor: e.target.value } })}
+                      onChange={(e) => updateSubtitleStyle({ highlightColor: e.target.value })}
                       className="w-7 h-6 rounded cursor-pointer border border-zinc-700"
                     />
                   )}

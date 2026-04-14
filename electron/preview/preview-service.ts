@@ -13,6 +13,16 @@ let previewWindow: BrowserWindow | null = null
 let previewServer: http.Server | null = null
 let previewServerUrl: string | null = null
 let previewServerToken: string | null = null
+let previewRenderQueue: Promise<void> = Promise.resolve()
+
+async function runPreviewRenderExclusive<T>(task: () => Promise<T>): Promise<T> {
+  const nextTask = previewRenderQueue.then(task, task)
+  previewRenderQueue = nextTask.then(
+    () => undefined,
+    () => undefined,
+  )
+  return nextTask
+}
 
 function getPreviewPreloadPath(): string {
   return isDev
@@ -248,13 +258,13 @@ async function handlePreviewRequest(req: IncomingMessage, res: ServerResponse): 
     const payload = JSON.parse(await readRequestBody(req)) as unknown
     if (req.url === '/preview/frame') {
       const parsed = previewFrameRequestSchema.parse(payload)
-      const response = await renderPreviewFrameToImage(parsed)
+      const response = await runPreviewRenderExclusive(() => renderPreviewFrameToImage(parsed))
       sendJson(res, 200, response)
       return
     }
     if (req.url === '/preview/clip') {
       const parsed = previewClipRequestSchema.parse(payload)
-      const response = await renderPreviewClipToVideo(parsed)
+      const response = await runPreviewRenderExclusive(() => renderPreviewClipToVideo(parsed))
       sendJson(res, 200, response)
       return
     }

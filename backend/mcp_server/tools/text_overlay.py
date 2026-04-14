@@ -1,6 +1,6 @@
 # pyright: reportUnusedFunction=false
 
-"""MCP tools for text overlay clips."""
+"""MCP tools for standalone text timeline clips."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 
 def register_text_overlay_tools(mcp: FastMCP, store: "ProjectStore") -> None:
-    """Register text overlay tools on the MCP server."""
+    """Register standalone text clip tools on the MCP server."""
 
     @mcp.tool()
     async def add_text_clip(
@@ -43,10 +43,15 @@ def register_text_overlay_tools(mcp: FastMCP, store: "ProjectStore") -> None:
         border_radius: float = 0.0,
         opacity: float = 100.0,
     ) -> dict[str, Any]:
-        """Add a text overlay clip to the timeline.
+        """Add a standalone text clip to the timeline.
 
-        Text overlays render on top of video tracks. Use a high track_index
-        (e.g. 2) to ensure they appear above video clips.
+        This creates a dedicated timeline clip with ``type="text"``. Use it for
+        editorial text such as titles, lower thirds, labels, and callouts.
+        Do not use this tool for subtitles or spoken captions; use the subtitle
+        tools and subtitle tracks for that workflow instead.
+
+        Text clips render on top of video tracks. Use a high track_index
+        (e.g. 2) to ensure they appear above underlying video clips.
 
         Args:
             track_index:     Track to place the clip on (0-based; use 2 for V3).
@@ -136,9 +141,11 @@ def register_text_overlay_tools(mcp: FastMCP, store: "ProjectStore") -> None:
         border_radius: float | None = None,
         opacity: float | None = None,
     ) -> dict[str, Any]:
-        """Update the style of an existing text overlay clip.
+        """Update the style of an existing standalone text clip.
 
         All parameters are optional — only the ones you provide are changed.
+        This tool is for non-subtitle text clips only; subtitle appearance
+        should be changed with the subtitle styling tools instead.
 
         Args:
             clip_id: The clip id of the text clip to update.

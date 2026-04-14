@@ -320,6 +320,10 @@ export const electronAPISchemas = {
     input: z.object({}),
     output: z.void(),
   },
+  restartPythonBackend: {
+    input: z.object({}),
+    output: z.void(),
+  },
   getBackendHealthStatus: {
     input: z.object({}),
     output: backendHealthStatus.nullable(),

@@ -69,6 +69,37 @@
             ],
             "title": "Ltxapikey"
           },
+          "mcpModules": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "boolean"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mcpmodules"
+          },
+          "mcpTools": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "type": "object"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mcptools"
+          },
           "modelsDir": {
             "anyOf": [
               {
@@ -1378,6 +1409,23 @@
             "title": "Lockedseed",
             "type": "integer"
           },
+          "mcpModules": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "title": "Mcpmodules",
+            "type": "object"
+          },
+          "mcpTools": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "boolean"
+              },
+              "type": "object"
+            },
+            "title": "Mcptools",
+            "type": "object"
+          },
           "modelsDir": {
             "default": "",
             "title": "Modelsdir",
@@ -1900,6 +1948,196 @@
         "summary": "Route Ic Lora Generate",
         "tags": [
           "ic-lora"
+        ]
+      }
+    },
+    "/api/mcp/events": {
+      "get": {
+        "description": "Server-Sent Events stream for real-time project change notifications.\n\nThe frontend connects via EventSource and receives lightweight JSON\nevents whenever any project is mutated by MCP tools or the PUT endpoint.",
+        "operationId": "sse_events_api_mcp_events_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Sse Events",
+        "tags": [
+          "mcp-projects"
+        ]
+      }
+    },
+    "/api/mcp/projects": {
+      "get": {
+        "description": "List all MCP-created projects (summaries).\n\nReturns id, name, createdAt, updatedAt, assetCount, clipCount for each project.\nUsed by the frontend to discover available MCP projects.",
+        "operationId": "list_mcp_projects_api_mcp_projects_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response List Mcp Projects Api Mcp Projects Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Mcp Projects",
+        "tags": [
+          "mcp-projects"
+        ]
+      }
+    },
+    "/api/mcp/projects/{project_id}": {
+      "delete": {
+        "description": "Delete an MCP project.",
+        "operationId": "delete_mcp_project_api_mcp_projects__project_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Delete Mcp Project Api Mcp Projects  Project Id  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Mcp Project",
+        "tags": [
+          "mcp-projects"
+        ]
+      },
+      "get": {
+        "description": "Return the full project JSON in frontend-compatible format.\n\nThe returned JSON matches the Project TypeScript interface exactly, so the\nfrontend can import it directly into localStorage without any transformation.",
+        "operationId": "get_mcp_project_api_mcp_projects__project_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Mcp Project Api Mcp Projects  Project Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Mcp Project",
+        "tags": [
+          "mcp-projects"
+        ]
+      },
+      "put": {
+        "description": "Replace an MCP project's JSON with the provided state.\n\nThis allows the frontend editor to persist its edits back into the MCP store,\nkeeping the UI and MCP tools in sync.\n\nSupports optimistic concurrency via ``If-Match`` header. If the header is\npresent, its value is compared against the stored project's ``updatedAt``.\nIf the stored project is newer, returns 409 Conflict with the current state.",
+        "operationId": "put_mcp_project_api_mcp_projects__project_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Project Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Put Mcp Project Api Mcp Projects  Project Id  Put"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Mcp Project",
+        "tags": [
+          "mcp-projects"
         ]
       }
     },

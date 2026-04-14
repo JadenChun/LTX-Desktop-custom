@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from mcp.server.fastmcp import FastMCP
 
 from mcp_server.project_state import ProjectStore
+from mcp_server.tool_manifest import resolve_mcp_tool_flags
 from mcp_server.tool_annotations import build_tool_annotations
 from mcp_server.tools.assets import register_asset_tools
 from mcp_server.tools.ai_generation import register_ai_generation_tools
@@ -34,6 +35,15 @@ logger = logging.getLogger(__name__)
 # Module-level store reference so mcp_projects route can access it without
 # circular imports (set by create_mcp_server at startup).
 _store: ProjectStore | None = None
+
+
+def _remove_disabled_tools(mcp: FastMCP, tool_flags: dict[str, dict[str, bool]]) -> None:
+    """Remove disabled tools from the advertised MCP surface."""
+    for module_tools in tool_flags.values():
+        for tool_name, enabled in module_tools.items():
+            if enabled:
+                continue
+            mcp._tool_manager._tools.pop(tool_name, None)  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
 
 
 def _remove_null_defaults(value: object) -> object:
@@ -100,8 +110,17 @@ def create_mcp_server(handler: "AppHandler") -> FastMCP:
     register_track_tools(mcp, _store)
     register_subtitle_tools(mcp, _store)
     register_text_overlay_tools(mcp, _store)
-    register_ai_generation_tools(mcp, handler)
     register_export_tools(mcp, _store)
+
+    tool_flags = resolve_mcp_tool_flags(
+        handler.state.app_settings.mcp_modules,
+        handler.state.app_settings.mcp_tools,
+    )
+    ai_tool_flags = tool_flags["ai_generation"]
+    if any(ai_tool_flags.values()):
+        register_ai_generation_tools(mcp, handler, enabled_tools=ai_tool_flags)
+
+    _remove_disabled_tools(mcp, tool_flags)
     _apply_tool_annotations(mcp)
     _sanitize_tool_schemas(mcp)
 
