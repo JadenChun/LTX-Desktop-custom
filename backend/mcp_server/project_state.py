@@ -14,7 +14,9 @@ Key conventions (matching the frontend):
 from __future__ import annotations
 
 import json
+import os
 import threading
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -159,20 +161,21 @@ class Asset(SchemaModel):
         if not isinstance(value, dict):
             return value
 
-        url = value.get("url")
-        path_value = value.get("path")
+        raw_value = cast(dict[str, Any], value)
+        url = raw_value.get("url")
+        path_value = raw_value.get("path")
         if url or not isinstance(path_value, str) or not path_value:
-            return value
+            return raw_value
 
         try:
-            value = dict(value)
-            value["url"] = Path(path_value).resolve().as_uri()
+            normalized_value: dict[str, Any] = dict(raw_value)
+            normalized_value["url"] = Path(path_value).resolve().as_uri()
         except Exception:
             # If URL derivation fails, leave the payload untouched and let the
             # regular validation error surface if a caller truly requires it.
-            return value
+            return raw_value
 
-        return value
+        return normalized_value
 
 
 class TimelineClip(SchemaModel):
@@ -287,10 +290,16 @@ class ProjectStore:
         # Optimize JSON: remove indent, exclude None values to minimize file size
         data = self._active.model_dump_json(indent=None, exclude_none=True)
         path = self._project_file(self._active.id)
-        
-        # Synchronous write is still used for now but with optimized data,
-        # its blocking time is minimized. 
-        path.write_text(data, encoding="utf-8")
+        fd, temp_path = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(self._state_dir))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_path, path)
+        finally:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
 
     def _touch(self) -> tuple[str, int] | None:
         """Update updatedAt and persist. Caller must hold _lock.

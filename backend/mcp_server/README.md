@@ -5,12 +5,19 @@ lifecycle as agentic tool calls.
 
 ## Transport
 
-When LTX Desktop is running, the backend exposes:
+LTX Desktop MCP is served over `stdio`.
 
-- Streamable HTTP at `http://127.0.0.1:8765/mcp`
-- SSE at `http://127.0.0.1:8765/mcp-sse`
+Development launch:
 
-MCP endpoints are localhost-only and currently do not require auth.
+```bash
+pnpm mcp:stdio
+```
+
+Packaged launch:
+
+```bash
+ltx-desktop mcp stdio
+```
 
 ## Tools
 
@@ -22,7 +29,7 @@ by the app settings `mcp_modules` and `mcp_tools`.
 |-------|-------|
 | **Project** (5) | `create_project`, `open_project`, `save_project`, `get_project_state`, `list_projects` |
 | **Assets** (3) | `import_asset`, `list_assets`, `get_asset_info` |
-| **Timeline** (23) | `add_clip`, `remove_clip`, `move_clip`, `trim_clip`, `split_clip`, `get_timeline_state`, `inspect_timeline`, `preview_frame`, `preview_clip`, `set_clip_speed`, `set_clip_volume`, `set_clip_muted`, `reverse_clip`, `set_clip_opacity`, `flip_clip`, `set_clip_motion`, `set_clip_color_correction`, `set_clip_transition`, `add_clip_effect`, `remove_clip_effect`, `update_clip_effect`, `update_clip`, `retake_clip` |
+| **Timeline** (21) | `add_clip`, `remove_clip`, `move_clip`, `trim_clip`, `split_clip`, `get_timeline_state`, `inspect_timeline`, `set_clip_speed`, `set_clip_volume`, `set_clip_muted`, `reverse_clip`, `set_clip_opacity`, `flip_clip`, `set_clip_motion`, `set_clip_color_correction`, `set_clip_transition`, `add_clip_effect`, `remove_clip_effect`, `update_clip_effect`, `update_clip`, `retake_clip` |
 | **Tracks** (4) | `add_track`, `remove_track`, `reorder_track`, `set_track_properties` |
 | **Text clips** (2) | `add_text_clip`, `update_text_clip_style` |
 | **Subtitles** (8) | `add_subtitle`, `update_subtitle`, `remove_subtitle`, `set_subtitle_style`, `set_subtitle_track_style`, `split_subtitle_progressive`, `split_all_subtitles_progressive`, `list_subtitles` |
@@ -91,15 +98,13 @@ while True:
 
 MCP projects are saved as JSON to `{outputs_dir}/mcp_projects/{id}.json`.
 
-The frontend lists MCP projects via `GET /api/mcp/projects` and fetches
-`GET /api/mcp/projects/{id}` when the backend project updates.
+When the desktop app is open, Electron watches that shared project directory and
+updates the UI automatically as the stdio MCP server changes project files.
 
-## Hidden Preview Rendering
+## Preview Rendering
 
-`preview_frame` and `preview_clip` use a localhost-only Electron bridge plus a
-hidden preview window inside the desktop app. They do not depend on the visible
-editor UI being open, but they do require the backend to be launched by LTX
-Desktop so the bridge URL/token are available.
+`preview_frame` and `preview_clip` are not exposed in stdio mode. Preview
+rendering remains a separate future capability because it depends on Electron.
 
 ## Project State Directory
 
@@ -107,6 +112,8 @@ Projects are stored at: `{handler.config.outputs_dir}/mcp_projects/`
 
 ## Connecting with MCP Inspector
 
+Configure the inspector to launch the stdio server command, for example:
+
 ```bash
-npx @modelcontextprotocol/inspector http://127.0.0.1:8765/mcp
+npx @modelcontextprotocol/inspector pnpm mcp:stdio
 ```

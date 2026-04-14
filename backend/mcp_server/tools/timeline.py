@@ -348,7 +348,12 @@ def _primary_visible_video_track(summary: list[dict[str, Any]]) -> dict[str, Any
     return None
 
 
-def register_timeline_tools(mcp: FastMCP, store: "ProjectStore") -> None:
+def register_timeline_tools(
+    mcp: FastMCP,
+    store: "ProjectStore",
+    *,
+    enable_preview: bool = True,
+) -> None:
     """Register timeline tools on the MCP server."""
 
     # ── Clip management ────────────────────────────────────────────────────────
@@ -520,69 +525,42 @@ def register_timeline_tools(mcp: FastMCP, store: "ProjectStore") -> None:
             )
         return payload
 
-    @mcp.tool()
-    async def preview_frame(
-        time: float,
-        width: int = 640,
-        height: int = 360,
-    ) -> dict[str, Any]:
-        """Render a still image preview of the active timeline at a given time.
+    if enable_preview:
+        @mcp.tool()
+        async def preview_frame(
+            time: float,
+            width: int = 640,
+            height: int = 360,
+        ) -> dict[str, Any]:
+            """Render a still image preview of the active timeline at a given time."""
+            project_payload = store.get_active().model_dump()
+            return await asyncio.to_thread(
+                render_preview_frame,
+                project_payload=project_payload,
+                time=max(0.0, time),
+                width=max(64, width),
+                height=max(64, height),
+            )
 
-        This asks the Electron desktop app to render the active MCP project in a
-        hidden preview window, then captures a PNG. Use inspect_timeline first
-        when you only need a cheap structural answer.
-
-        Args:
-            time: Timeline time in seconds to capture.
-            width: Output preview width in pixels (default 640).
-            height: Output preview height in pixels (default 360).
-
-        Returns:
-            {"imagePath": str, "time": float, "width": int, "height": int}
-        """
-        project_payload = store.get_active().model_dump()
-        return await asyncio.to_thread(
-            render_preview_frame,
-            project_payload=project_payload,
-            time=max(0.0, time),
-            width=max(64, width),
-            height=max(64, height),
-        )
-
-    @mcp.tool()
-    async def preview_clip(
-        start_time: float,
-        duration: float = 1.5,
-        width: int = 640,
-        height: int = 360,
-        fps: int = 8,
-    ) -> dict[str, Any]:
-        """Render a short video preview of the active timeline.
-
-        This is more expensive than preview_frame and is meant for checking
-        timing, motion, and dissolve pacing across a short range.
-
-        Args:
-            start_time: Timeline time in seconds at which to start the preview.
-            duration: Preview duration in seconds (default 1.5, max 10).
-            width: Output preview width in pixels (default 640).
-            height: Output preview height in pixels (default 360).
-            fps: Preview frame rate (default 8, max 24).
-
-        Returns:
-            {"videoPath": str, "startTime": float, "duration": float,
-             "fps": int, "frameCount": int, "width": int, "height": int}
-        """
-        project_payload = store.get_active().model_dump()
-        return await asyncio.to_thread(
-            render_preview_clip,
-            project_payload=project_payload,
-            start_time=max(0.0, start_time),
-            duration=max(0.1, min(10.0, duration)),
-            width=max(64, width),
-            height=max(64, height),
-            fps=max(1, min(24, fps)),
-        )
+        @mcp.tool()
+        async def preview_clip(
+            start_time: float,
+            duration: float = 1.5,
+            width: int = 640,
+            height: int = 360,
+            fps: int = 8,
+        ) -> dict[str, Any]:
+            """Render a short video preview of the active timeline."""
+            project_payload = store.get_active().model_dump()
+            return await asyncio.to_thread(
+                render_preview_clip,
+                project_payload=project_payload,
+                start_time=max(0.0, start_time),
+                duration=max(0.1, min(10.0, duration)),
+                width=max(64, width),
+                height=max(64, height),
+                fps=max(1, min(24, fps)),
+            )
 
     # ── Clip property setters ──────────────────────────────────────────────────
 

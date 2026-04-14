@@ -118,6 +118,26 @@ const backendHealthStatus = z.object({
 })
 
 export type BackendHealthStatus = z.infer<typeof backendHealthStatus>
+const mcpProjectSummary = z.object({
+  id: z.string(),
+  name: z.string().optional(),
+  createdAt: z.number().optional(),
+  updatedAt: z.number().optional(),
+  assetCount: z.number(),
+  clipCount: z.number(),
+})
+const mcpProjectPayload = z.record(z.string(), z.unknown())
+const putMcpProjectResult = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('ok'), project: mcpProjectPayload }),
+  z.object({ status: z.literal('conflict'), project: mcpProjectPayload }),
+  z.object({ status: z.literal('not_found') }),
+])
+const mcpProjectChangeEvent = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('updated'), projectId: z.string(), updatedAt: z.number() }),
+  z.object({ kind: z.literal('deleted'), projectId: z.string() }),
+])
+
+export type McpProjectChangeEvent = z.infer<typeof mcpProjectChangeEvent>
 
 export const electronAPISchemas = {
   // App info
@@ -242,6 +262,26 @@ export const electronAPISchemas = {
   getProjectAssetsPath: {
     input: z.object({}),
     output: z.string(),
+  },
+  listMcpProjects: {
+    input: z.object({}),
+    output: z.array(mcpProjectSummary),
+  },
+  getMcpProject: {
+    input: z.object({ projectId: z.string() }),
+    output: mcpProjectPayload,
+  },
+  putMcpProject: {
+    input: z.object({
+      projectId: z.string(),
+      project: mcpProjectPayload,
+      ifMatch: z.number().optional(),
+    }),
+    output: putMcpProjectResult,
+  },
+  deleteMcpProject: {
+    input: z.object({ projectId: z.string() }),
+    output: z.object({ deleted: z.boolean() }),
   },
   openProjectAssetsPathChangeDialog: {
     input: z.object({}),
@@ -374,6 +414,7 @@ export type ElectronAPI = InvokeAPI & {
   onPythonSetupProgress: (cb: (data: unknown) => void) => void
   removePythonSetupProgress: () => void
   onBackendHealthStatus: (cb: (data: BackendHealthStatus) => void) => (() => void)
+  onMcpProjectChanged: (cb: (event: McpProjectChangeEvent) => void) => (() => void)
   onExportProgress: (cb: (percent: number) => void) => void
   removeExportProgress: () => void
   getPathForFile: (file: File) => string

@@ -116,3 +116,13 @@ def test_create_mcp_server_respects_non_ai_tool_toggle(test_state) -> None:
     assert "preview_clip" not in tool_names
     assert "preview_frame" in tool_names
     assert "add_clip" in tool_names
+
+
+def test_create_mcp_server_stdio_excludes_preview_tools(test_state) -> None:
+    server = create_mcp_server(test_state, transport="stdio")
+
+    tool_names = {tool.name for tool in server._tool_manager.list_tools()}  # noqa: SLF001
+
+    assert "preview_clip" not in tool_names
+    assert "preview_frame" not in tool_names
+    assert "export_timeline" in tool_names

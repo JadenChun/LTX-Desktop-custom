@@ -25,6 +25,7 @@ import threading
 
 import torch
 
+from app_data_dir import resolve_app_data_dir
 from state.app_settings import AppSettings
 
 # ============================================================
@@ -127,19 +128,7 @@ def _get_device() -> torch.device:
 DEVICE = _get_device()
 DTYPE = torch.bfloat16
 
-def _resolve_app_data_dir() -> Path:
-    env_path = os.environ.get("LTX_APP_DATA_DIR")
-    if not env_path:
-        raise RuntimeError(
-            "LTX_APP_DATA_DIR environment variable must be set. "
-            "When running standalone, set it to the desired data directory."
-        )
-    candidate = Path(env_path)
-    candidate.mkdir(parents=True, exist_ok=True)
-    return candidate
-
-
-APP_DATA_DIR = _resolve_app_data_dir()
+APP_DATA_DIR = resolve_app_data_dir()
 
 DEFAULT_MODELS_DIR = APP_DATA_DIR / "models"
 DEFAULT_MODELS_DIR.mkdir(parents=True, exist_ok=True)
@@ -318,9 +307,7 @@ if __name__ == "__main__":
             print(f"Server running on http://127.0.0.1:{actual_port}", flush=True)
             print("", flush=True)
             print("=" * 60, flush=True)
-            print("  MCP Server ready for AI agents (no auth required)", flush=True)
-            print(f"  Streamable HTTP (Claude Code): http://127.0.0.1:{actual_port}/mcp", flush=True)
-            print(f"  SSE transport  (LM Studio):   http://127.0.0.1:{actual_port}/mcp-sse", flush=True)
+            print("  Backend ready", flush=True)
             print("=" * 60, flush=True)
             print("", flush=True)
 

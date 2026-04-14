@@ -1,17 +1,10 @@
-"""MCP server factory for LTX Desktop.
-
-Creates and configures the FastMCP server instance with all tool modules.
-Mount the returned server at /mcp in app_factory.py:
-
-    mcp_server = create_mcp_server(handler)
-    app.mount("/mcp", mcp_server.streamable_http_app())
-"""
+"""MCP server factory for LTX Desktop."""
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from mcp.server.fastmcp import FastMCP
 
@@ -32,8 +25,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Module-level store reference so mcp_projects route can access it without
-# circular imports (set by create_mcp_server at startup).
+# Module-level store reference for callers that need access to the active
+# project store created by create_mcp_server().
 _store: ProjectStore | None = None
 
 
@@ -58,25 +51,25 @@ def _remove_null_defaults(value: object) -> object:
     """
     if isinstance(value, dict):
         cleaned: dict[str, object] = {}
-        for key, nested in value.items():
+        for key, nested in cast(dict[str, object], value).items():
             if key == "default" and nested is None:
                 continue
             cleaned[key] = _remove_null_defaults(nested)
         return cleaned
     if isinstance(value, list):
-        return [_remove_null_defaults(item) for item in value]
+        return [_remove_null_defaults(item) for item in cast(list[object], value)]
     return value
 
 
 def _sanitize_tool_schemas(mcp: FastMCP) -> None:
     """Normalize advertised tool schemas for MCP host compatibility."""
-    for tool in mcp._tool_manager.list_tools():  # noqa: SLF001
-        tool.parameters = _remove_null_defaults(tool.parameters)
+    for tool in mcp._tool_manager.list_tools():  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
+        tool.parameters = cast(dict[str, Any], _remove_null_defaults(tool.parameters))
 
 
 def _apply_tool_annotations(mcp: FastMCP) -> None:
     """Apply consistent MCP annotations across all registered tools."""
-    for tool in mcp._tool_manager.list_tools():  # noqa: SLF001
+    for tool in mcp._tool_manager.list_tools():  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
         if tool.annotations is None:
             tool.annotations = build_tool_annotations(tool.name)
 
@@ -88,14 +81,18 @@ def get_store() -> ProjectStore:
     return _store
 
 
-def create_mcp_server(handler: "AppHandler") -> FastMCP:
-    """Create the FastMCP server. Called once at app startup.
+def create_mcp_server(
+    handler: "AppHandler",
+    *,
+    transport: Literal["http", "stdio"] = "http",
+) -> FastMCP:
+    """Create the FastMCP server.
 
     Args:
         handler: The application handler providing AI generation capabilities.
 
     Returns:
-        Configured FastMCP instance ready to be mounted at /mcp.
+        Configured FastMCP instance ready to run over the selected transport.
     """
     global _store  # noqa: PLW0603
 
@@ -106,11 +103,13 @@ def create_mcp_server(handler: "AppHandler") -> FastMCP:
 
     register_project_tools(mcp, _store)
     register_asset_tools(mcp, _store)
-    register_timeline_tools(mcp, _store)
+    preview_enabled = transport == "http"
+
+    register_timeline_tools(mcp, _store, enable_preview=preview_enabled)
     register_track_tools(mcp, _store)
     register_subtitle_tools(mcp, _store)
     register_text_overlay_tools(mcp, _store)
-    register_export_tools(mcp, _store)
+    register_export_tools(mcp, _store, enable_composited_preview=preview_enabled)
 
     tool_flags = resolve_mcp_tool_flags(
         handler.state.app_settings.mcp_modules,

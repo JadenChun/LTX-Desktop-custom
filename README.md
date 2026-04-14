@@ -181,34 +181,31 @@ Building installers:
 
 ## AI Assistant / MCP Setup
 
-LTX Desktop ships with a built-in MCP server in the Python backend. Start the desktop app first, then connect your MCP client to the local endpoint exposed by the running app.
+LTX Desktop now exposes MCP as a standalone `stdio` server. The desktop app does not need to be open for an agent to use MCP.
 
-Default MCP endpoints:
+Development launch:
 
-- Streamable HTTP: `http://127.0.0.1:8765/mcp`
-- SSE: `http://127.0.0.1:8765/mcp-sse`
+```bash
+pnpm mcp:stdio
+```
 
-The MCP endpoints are localhost-only and do not require auth.
+Packaged launch:
 
-Example MCP configuration for clients that accept a remote HTTP MCP server URL:
+```bash
+ltx-desktop mcp stdio
+```
+
+Example MCP client configuration:
 
 ```json
 {
   "mcpServers": {
     "ltx-desktop": {
-      "url": "http://127.0.0.1:8765/mcp"
+      "command": "pnpm",
+      "args": ["mcp:stdio"]
     }
   }
 }
-```
-
-Some MCP clients also require an explicit transport selector. In those clients, use `streamable_http` with the same URL above.
-
-You can verify the app-side server is up with:
-
-```bash
-curl http://127.0.0.1:8765/health
-npx @modelcontextprotocol/inspector http://127.0.0.1:8765/mcp
 ```
 
 Repository guidance files:

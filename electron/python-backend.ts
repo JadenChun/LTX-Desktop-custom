@@ -52,6 +52,10 @@ function getBackendPath(): string {
   return path.join(process.resourcesPath, 'backend')
 }
 
+function getBackendEntrypoint(scriptName: string): string {
+  return path.join(getBackendPath(), scriptName)
+}
+
 function isPortConflictOutput(output: string): boolean {
   const normalizedOutput = output.toLowerCase()
   return (
@@ -142,7 +146,7 @@ function startOwnershipTakeover(): void {
   })()
 }
 
-export function getPythonPath(): string {
+export function getPythonPath(logResolution = true): string {
   // In production, use bundled/downloaded Python first
   if (!isDev) {
     const pythonDir = getPythonDir()
@@ -150,7 +154,7 @@ export function getPythonPath(): string {
       ? path.join(pythonDir, 'python.exe')
       : path.join(pythonDir, 'bin', 'python3')
     if (fs.existsSync(bundledPython)) {
-      logger.info(`Using bundled Python: ${bundledPython}`)
+      if (logResolution) logger.info(`Using bundled Python: ${bundledPython}`)
       return bundledPython
     }
   }
@@ -163,7 +167,7 @@ export function getPythonPath(): string {
     : path.join(backendPath, '.venv', 'bin', 'python')
 
   if (fs.existsSync(venvPython)) {
-    logger.info(`Using venv Python: ${venvPython}`)
+    if (logResolution) logger.info(`Using venv Python: ${venvPython}`)
     return venvPython
   }
 
@@ -224,7 +228,7 @@ export async function startPythonBackend(): Promise<void> {
 
       const pythonPath = getPythonPath()
       const backendPath = getBackendPath()
-      const mainPy = path.join(backendPath, 'ltx2_server.py')
+      const mainPy = getBackendEntrypoint('ltx2_server.py')
 
       logger.info(`Starting Python backend: ${pythonPath} ${mainPy}`)
 
@@ -419,6 +423,43 @@ export async function startPythonBackend(): Promise<void> {
   } finally {
     startPromise = null
   }
+}
+
+export async function runPythonMcpStdio(): Promise<number> {
+  const pythonPath = getPythonPath(false)
+  const backendPath = getBackendPath()
+  const mainPy = getBackendEntrypoint('ltx_mcp_stdio.py')
+
+  let pythonArgs: string[]
+  if (!isDev && process.platform === 'win32') {
+    const preamble = `import sys; sys.path.insert(0, r"${backendPath}"); import runpy; runpy.run_path(r"${mainPy}", run_name="__main__")`
+    pythonArgs = ['-u', '-c', preamble]
+  } else {
+    pythonArgs = isDev ? ['-Xfrozen_modules=off', '-u', mainPy] : ['-u', mainPy]
+  }
+
+  return await new Promise<number>((resolve, reject) => {
+    const child = spawn(pythonPath, pythonArgs, {
+      cwd: backendPath,
+      env: {
+        ...process.env,
+        PYTHONUNBUFFERED: '1',
+        PYTHONNOUSERSITE: '1',
+        LTX_APP_DATA_DIR: getAppDataDir(),
+        LTX_DEV_MODE: isDev ? '1' : '0',
+        PYTORCH_ENABLE_MPS_FALLBACK: '1',
+        ...(!isDev && process.platform !== 'win32' ? {
+          PYTHONHOME: getPythonDir(),
+        } : {}),
+      },
+      stdio: 'inherit',
+    })
+
+    child.on('error', reject)
+    child.on('exit', (code) => {
+      resolve(code ?? 0)
+    })
+  })
 }
 
 async function waitForManagedProcessExit(

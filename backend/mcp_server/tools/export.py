@@ -59,7 +59,12 @@ def _job_payload(
     }
 
 
-def register_export_tools(mcp: FastMCP, store: "ProjectStore") -> None:
+def register_export_tools(
+    mcp: FastMCP,
+    store: "ProjectStore",
+    *,
+    enable_composited_preview: bool = True,
+) -> None:
     """Register export tools on the MCP server."""
 
     @mcp.tool()
@@ -109,6 +114,10 @@ def register_export_tools(mcp: FastMCP, store: "ProjectStore") -> None:
         job_id = f"export-{uuid.uuid4().hex[:9]}"
 
         if mode == "composited_preview":
+            if not enable_composited_preview:
+                raise RuntimeError(
+                    "composited_preview export is unavailable in stdio mode because preview rendering requires Electron."
+                )
             duration = _timeline_duration(timeline)
             if duration <= 0:
                 raise RuntimeError("Timeline is empty; nothing to export.")

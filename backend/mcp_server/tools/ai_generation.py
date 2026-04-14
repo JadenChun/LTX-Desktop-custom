@@ -31,8 +31,8 @@ def register_ai_generation_tools(
         @mcp.tool()
         async def generate_video(
             prompt: str,
-            resolution: str = "720p",
-            model: str = "fast",
+            resolution: Literal["540p", "720p", "1080p", "1440p", "2160p"] = "720p",
+            model: Literal["fast", "pro"] = "fast",
             camera_motion: Literal[
                 "none", "dolly_in", "dolly_out", "dolly_left", "dolly_right",
                 "jib_up", "jib_down", "static", "focus_shift"
@@ -77,7 +77,7 @@ def register_ai_generation_tools(
             start_time: float,
             duration: float,
             prompt: str = "",
-            mode: str = "replace_audio_and_video",
+            mode: Literal["replace_audio_and_video", "replace_video", "replace_audio"] = "replace_audio_and_video",
         ) -> dict[str, Any]:
             """Re-generate a section of an existing video clip."""
             from api_types import RetakeRequest
@@ -99,7 +99,7 @@ def register_ai_generation_tools(
             gap_duration: float = 5.0,
             before_prompt: str = "",
             after_prompt: str = "",
-            mode: str = "t2v",
+            mode: Literal["text-to-video", "image-to-video", "text-to-image"] = "text-to-video",
             before_frame: str | None = None,
             after_frame: str | None = None,
             input_image: str | None = None,

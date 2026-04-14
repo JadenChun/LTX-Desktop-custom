@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 import type { Project, Asset, AssetTake, ViewType, ProjectTab } from '../types/project'
 import { createDefaultTimeline } from '../types/project'
-import { backendFetch, backendSseUrl } from '../lib/backend'
+import type { McpProjectChangeEvent } from '../../shared/electron-api-schema'
 import { logger } from '../lib/logger'
 
 interface ProjectContextType {
@@ -209,6 +209,7 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
   const mcpSaveTimersRef = useRef<Map<string, number>>(new Map())
   const mcpSavePendingRef = useRef<Map<string, Project>>(new Map())
   const mcpSaveInFlightRef = useRef<Set<string>>(new Set())
+  const mcpAcknowledgedWritesRef = useRef<Map<string, number>>(new Map())
   const lastApprovedPathsSignatureRef = useRef<string>('')
 
   // Mark as initialized after first render
@@ -216,14 +217,47 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
     isInitializedRef.current = true
   }, [])
 
-  // Sync a single MCP project by ID (fetch full state from backend)
+  const loadMcpProject = useCallback(async (projectId: string): Promise<Project> => {
+    const projectData = await window.electronAPI.getMcpProject({ projectId }) as unknown as Project
+    const imported = recoverAssetUrls(migrateProject(projectData))
+    imported.mcpLastUpdatedAt = imported.updatedAt
+    return imported
+  }, [])
+
+  const handleExternalDelete = useCallback((projectId: string) => {
+    mcpAcknowledgedWritesRef.current.delete(projectId)
+
+    setProjects(prev => {
+      const existing = prev.find(project => project.id === projectId)
+      if (!existing) return prev
+
+      const next = prev.filter(project => project.id !== projectId)
+      const lastSeen = existing.mcpLastUpdatedAt ?? 0
+      if (existing.mcpLastUpdatedAt !== undefined && existing.updatedAt > lastSeen) {
+        const now = Date.now()
+        next.unshift({
+          ...existing,
+          id: `project-${now}-${Math.random().toString(36).substr(2, 9)}`,
+          name: `${existing.name} (Local backup)`,
+          createdAt: now,
+          updatedAt: now,
+          mcpLastUpdatedAt: undefined,
+          backupOfProjectId: existing.id,
+        })
+      }
+      return next
+    })
+
+    if (currentProjectId === projectId) {
+      setCurrentProjectId(null)
+      setCurrentView('home')
+    }
+  }, [currentProjectId])
+
+  // Sync a single MCP project by ID (fetch full state from shared store)
   const syncSingleProject = useCallback(async (projectId: string) => {
     try {
-      const pr = await backendFetch(`/api/mcp/projects/${projectId}`)
-      if (!pr.ok) return
-      const projectData = await pr.json() as Project
-      const imported = recoverAssetUrls(migrateProject(projectData))
-      imported.mcpLastUpdatedAt = imported.updatedAt
+      const imported = await loadMcpProject(projectId)
 
       setProjects(prev => {
         const existing = prev.find(p => p.id === projectId)
@@ -254,18 +288,23 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
     } catch (e) {
       logger.info(`MCP sync for ${projectId} failed: ${e}`)
     }
-  }, [])
+  }, [loadMcpProject])
 
   // Full sync: fetch all MCP project summaries and sync any that are newer
   const syncAllMcpProjects = useCallback(async () => {
     try {
-      const resp = await backendFetch('/api/mcp/projects')
-      if (!resp.ok) return
-      const summaries = await resp.json() as { id: string, updatedAt?: number }[]
+      const summaries = await window.electronAPI.listMcpProjects()
+      const summaryIds = new Set(summaries.map(summary => summary.id))
 
       const stored = localStorage.getItem(STORAGE_KEY)
       const existing = stored ? (JSON.parse(stored) as Project[]) : []
       const existingById = new Map(existing.map(p => [p.id, p]))
+
+      for (const localProject of existing) {
+        if (localProject.mcpLastUpdatedAt === undefined) continue
+        if (summaryIds.has(localProject.id)) continue
+        handleExternalDelete(localProject.id)
+      }
 
       for (const summary of summaries) {
         if (!summary?.id) continue
@@ -278,77 +317,35 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
     } catch (e) {
       logger.info(`MCP auto-sync skipped: ${e}`)
     }
-  }, [syncSingleProject])
+  }, [handleExternalDelete, syncSingleProject])
 
-  // SSE connection for real-time backend→frontend sync, with polling fallback
+  // Electron watcher-driven MCP sync
   useEffect(() => {
-    let eventSource: EventSource | null = null
-    let fallbackIntervalId: number | null = null
-    let cancelled = false
-
-    const connectSse = async () => {
-      if (cancelled) return
-      try {
-        const sseUrl = await backendSseUrl('/api/mcp/events')
-        if (cancelled) return
-        eventSource = new EventSource(sseUrl)
-
-        eventSource.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data) as { type: string; projectId: string; updatedAt: number }
-            if (data.type === 'project_updated' && data.projectId) {
-              void syncSingleProject(data.projectId)
-            }
-          } catch {
-            // Ignore malformed messages
-          }
-        }
-
-        eventSource.onopen = () => {
-          // SSE connected — stop polling fallback if running
-          if (fallbackIntervalId !== null) {
-            window.clearInterval(fallbackIntervalId)
-            fallbackIntervalId = null
-          }
-        }
-
-        eventSource.onerror = () => {
-          // SSE disconnected — close and try to reconnect after 2s
-          eventSource?.close()
-          eventSource = null
-          // Start polling fallback while SSE is down
-          if (fallbackIntervalId === null && !cancelled) {
-            fallbackIntervalId = window.setInterval(() => { void syncAllMcpProjects() }, 2000)
-          }
-          if (!cancelled) {
-            window.setTimeout(connectSse, 2000)
-          }
-        }
-      } catch {
-        // SSE not available — fall back to polling
-        if (fallbackIntervalId === null && !cancelled) {
-          fallbackIntervalId = window.setInterval(() => { void syncAllMcpProjects() }, 2000)
-        }
-        if (!cancelled) {
-          window.setTimeout(connectSse, 5000)
-        }
-      }
-    }
-
-    // Do an initial full sync, then connect SSE
     void syncAllMcpProjects()
-    void connectSse()
+
+    const unsubscribe = window.electronAPI.onMcpProjectChanged((event: McpProjectChangeEvent) => {
+      if (event.kind === 'updated') {
+        const acknowledged = mcpAcknowledgedWritesRef.current.get(event.projectId)
+        if (acknowledged !== undefined && event.updatedAt <= acknowledged) {
+          if (event.updatedAt === acknowledged) {
+            mcpAcknowledgedWritesRef.current.delete(event.projectId)
+          }
+          return
+        }
+        void syncSingleProject(event.projectId)
+        return
+      }
+      handleExternalDelete(event.projectId)
+    })
 
     const onFocus = () => { void syncAllMcpProjects() }
     window.addEventListener('focus', onFocus)
 
     return () => {
-      cancelled = true
-      eventSource?.close()
-      if (fallbackIntervalId !== null) window.clearInterval(fallbackIntervalId)
+      unsubscribe()
       window.removeEventListener('focus', onFocus)
     }
-  }, [syncSingleProject, syncAllMcpProjects])
+  }, [handleExternalDelete, syncAllMcpProjects, syncSingleProject])
 
   // If MCP sync created a local backup, automatically merge it back into the MCP store (one-time recovery).
   useEffect(() => {
@@ -403,14 +400,14 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
           delete payload.mcpLastUpdatedAt
           delete payload.backupOfProjectId
 
-          const resp = await backendFetch(`/api/mcp/projects/${target.id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
+          const resp = await window.electronAPI.putMcpProject({
+            projectId: target.id,
+            project: payload as unknown as Record<string, unknown>,
           })
-          if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-          const saved = await resp.json() as Project
+          if (resp.status !== 'ok' || !resp.project) throw new Error(`status=${resp.status}`)
+          const saved = resp.project as unknown as Project
           const serverUpdatedAt = saved.updatedAt
+          mcpAcknowledgedWritesRef.current.set(target.id, serverUpdatedAt)
 
           setProjects(prev => {
             const next = prev
@@ -463,29 +460,29 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
 
       mcpSaveInFlightRef.current.add(projectId)
       try {
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-        // Optimistic concurrency: tell the server what version we last saw
-        if (lastSeen > 0) {
-          headers['If-Match'] = String(lastSeen)
-        }
-        const resp = await backendFetch(`/api/mcp/projects/${projectId}`, {
-          method: 'PUT',
-          headers,
-          body: JSON.stringify(pending),
+        const resp = await window.electronAPI.putMcpProject({
+          projectId,
+          project: pending as unknown as Record<string, unknown>,
+          ifMatch: lastSeen > 0 ? lastSeen : undefined,
         })
-        if (resp.status === 409) {
+        if (resp.status === 'conflict' && resp.project) {
           // Server has newer version — fetch it and merge
-          const serverProject = await resp.json() as Project
-          const imported = recoverAssetUrls(migrateProject(serverProject))
+          const imported = recoverAssetUrls(migrateProject(resp.project as unknown as Project))
           imported.mcpLastUpdatedAt = imported.updatedAt
           setProjects(prev => prev.map(p => p.id === projectId ? imported : p))
           mcpSavePendingRef.current.delete(projectId)
           return
         }
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-        const saved = await resp.json() as Project
+        if (resp.status === 'not_found') {
+          mcpSavePendingRef.current.delete(projectId)
+          handleExternalDelete(projectId)
+          return
+        }
+        if (resp.status !== 'ok' || !resp.project) throw new Error(`status=${resp.status}`)
+        const saved = resp.project as unknown as Project
         const imported = recoverAssetUrls(migrateProject(saved))
         const serverUpdatedAt = imported.updatedAt
+        mcpAcknowledgedWritesRef.current.set(projectId, serverUpdatedAt)
 
         setProjects(prev => prev.map(p => (
           p.id === projectId
@@ -579,10 +576,10 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
     }
     mcpSavePendingRef.current.delete(id)
     mcpSaveInFlightRef.current.delete(id)
+    mcpAcknowledgedWritesRef.current.delete(id)
 
-    // Try to delete from the MCP backend (fire and forget)
-    void backendFetch(`/api/mcp/projects/${id}`, { method: 'DELETE' })
-      .catch((e: any) => logger.info(`Failed to delete project on backend: ${e}`))
+    void window.electronAPI.deleteMcpProject({ projectId: id })
+      .catch((e: unknown) => logger.info(`Failed to delete project in MCP store: ${e}`))
 
     setProjects(prev => prev.filter(p => p.id !== id))
     if (currentProjectId === id) {
@@ -742,11 +739,7 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
     const overwrite = options?.overwrite ?? true
     const createBackup = options?.createBackup ?? true
 
-    const resp = await backendFetch(`/api/mcp/projects/${projectId}`)
-    if (!resp.ok) throw new Error(`Failed to fetch MCP project: ${resp.status}`)
-    const projectData = await resp.json() as Project
-    const imported = recoverAssetUrls(migrateProject(projectData))
-    imported.mcpLastUpdatedAt = imported.updatedAt
+    const imported = await loadMcpProject(projectId)
     setProjects(prev => {
       const existingIndex = prev.findIndex(p => p.id === imported.id)
       if (existingIndex === -1) return [imported, ...prev]
@@ -774,7 +767,7 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
       return next
     })
     return imported
-  }, [])
+  }, [loadMcpProject])
 
   const openProject = useCallback((id: string) => {
     setCurrentProjectId(id)

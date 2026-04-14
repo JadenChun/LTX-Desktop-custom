@@ -66,7 +66,7 @@ def render_preview_frame(
     height: int,
     output_path: str | None = None,
 ) -> dict[str, Any]:
-    payload = {
+    payload: dict[str, Any] = {
         "project": project_payload,
         "time": time,
         "width": width,
@@ -90,7 +90,7 @@ def render_preview_clip(
     fps: int,
     output_path: str | None = None,
 ) -> dict[str, Any]:
-    payload = {
+    payload: dict[str, Any] = {
         "project": project_payload,
         "startTime": start_time,
         "duration": duration,
