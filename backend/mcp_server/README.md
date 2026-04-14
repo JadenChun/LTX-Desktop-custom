@@ -103,8 +103,9 @@ updates the UI automatically as the stdio MCP server changes project files.
 
 ## Preview Rendering
 
-`preview_frame` and `preview_clip` are not exposed in stdio mode. Preview
-rendering remains a separate future capability because it depends on Electron.
+`preview_frame` and `preview_clip` are exposed in stdio mode and render through
+the backend preview pipeline. `export_timeline(mode="composited_preview")`
+uses the same backend renderer for visual-only composed exports.
 
 ## Project State Directory
 

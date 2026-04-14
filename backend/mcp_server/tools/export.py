@@ -10,22 +10,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
-from mcp_server.electron_preview_bridge import render_preview_clip
+from mcp_server.preview_renderer import render_preview_clip
+from mcp_server.preview_state import timeline_duration
 
 if TYPE_CHECKING:
     from mcp_server.project_state import ProjectStore, Timeline, TimelineClip
 
 # In-memory export job registry (keyed by job_id)
 _export_jobs: dict[str, dict[str, Any]] = {}
-
-
-def _timeline_duration(timeline: "Timeline") -> float:
-    duration = 0.0
-    for clip in timeline.clips:
-        duration = max(duration, clip.startTime + clip.duration)
-    for subtitle in timeline.subtitles:
-        duration = max(duration, subtitle.endTime)
-    return duration
 
 
 def _primary_visual_track_index(timeline: "Timeline") -> int | None:
@@ -62,8 +54,6 @@ def _job_payload(
 def register_export_tools(
     mcp: FastMCP,
     store: "ProjectStore",
-    *,
-    enable_composited_preview: bool = True,
 ) -> None:
     """Register export tools on the MCP server."""
 
@@ -80,7 +70,7 @@ def register_export_tools(
         Modes:
         - primary_video_concat: ffmpeg concat of the highest enabled visual media track.
         - track0_concat: legacy ffmpeg concat of track 0 only.
-        - composited_preview: visual export of the composed timeline via the Electron preview bridge.
+        - composited_preview: visual export of the composed timeline via the backend preview renderer.
 
         `composited_preview` preserves overlays and subtitles in the rendered frames,
         but it is currently visual-only and does not include mixed audio.
@@ -114,11 +104,7 @@ def register_export_tools(
         job_id = f"export-{uuid.uuid4().hex[:9]}"
 
         if mode == "composited_preview":
-            if not enable_composited_preview:
-                raise RuntimeError(
-                    "composited_preview export is unavailable in stdio mode because preview rendering requires Electron."
-                )
-            duration = _timeline_duration(timeline)
+            duration = timeline_duration(timeline)
             if duration <= 0:
                 raise RuntimeError("Timeline is empty; nothing to export.")
             _export_jobs[job_id] = _job_payload(
@@ -277,7 +263,7 @@ async def _run_composited_preview_export(
     height: int,
     fps: int,
 ) -> None:
-    """Background task: render a composed visual timeline preview through Electron."""
+    """Background task: render a composed visual timeline preview through the backend renderer."""
     _export_jobs[job_id]["status"] = "running"
     try:
         await asyncio.to_thread(

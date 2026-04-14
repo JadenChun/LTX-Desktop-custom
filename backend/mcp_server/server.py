@@ -103,13 +103,12 @@ def create_mcp_server(
 
     register_project_tools(mcp, _store)
     register_asset_tools(mcp, _store)
-    preview_enabled = transport == "http"
 
-    register_timeline_tools(mcp, _store, enable_preview=preview_enabled)
+    register_timeline_tools(mcp, _store, enable_preview=True)
     register_track_tools(mcp, _store)
     register_subtitle_tools(mcp, _store)
     register_text_overlay_tools(mcp, _store)
-    register_export_tools(mcp, _store, enable_composited_preview=preview_enabled)
+    register_export_tools(mcp, _store)
 
     tool_flags = resolve_mcp_tool_flags(
         handler.state.app_settings.mcp_modules,
