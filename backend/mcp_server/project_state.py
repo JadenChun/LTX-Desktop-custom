@@ -3,7 +3,7 @@
 Uses the EXACT same JSON schema as the frontend TypeScript interfaces
 (Project, Asset, Timeline, Track, TimelineClip, SubtitleClip, TextOverlayStyle)
 so that MCP-created projects can be imported directly into the LTX Desktop UI
-via GET /api/mcp/projects/{id}.
+via Electron IPC (getMcpProject / listMcpProjects).
 
 Key conventions (matching the frontend):
 - IDs:        "project-{unix_ms}-{random9}", "asset-{unix_ms}-{random9}", etc.
@@ -20,7 +20,7 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Literal, cast
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -259,23 +259,6 @@ class ProjectStore:
         self._state_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._active: Project | None = None
-        self._listeners: list[Callable[[str, int], None]] = []
-
-    # ── Listener management ──────────────────────────────────────────────────
-
-    def add_listener(self, callback: Callable[[str, int], None]) -> None:
-        """Register a callback invoked after every project mutation.
-
-        The callback receives (project_id, updated_at_ms).
-        """
-        self._listeners.append(callback)
-
-    def remove_listener(self, callback: Callable[[str, int], None]) -> None:
-        """Remove a previously registered listener."""
-        try:
-            self._listeners.remove(callback)
-        except ValueError:
-            pass
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
@@ -301,28 +284,11 @@ class ProjectStore:
             if os.path.exists(temp_path):
                 os.unlink(temp_path)
 
-    def _touch(self) -> tuple[str, int] | None:
-        """Update updatedAt and persist. Caller must hold _lock.
-
-        Returns (project_id, updated_at) for notification, or None.
-        """
+    def _touch(self) -> None:
+        """Update updatedAt and persist. Caller must hold _lock."""
         if self._active:
             self._active.updatedAt = _now_ms()
-            self._persist()
-            return (self._active.id, self._active.updatedAt)
         self._persist()
-        return None
-
-    def _notify(self, info: tuple[str, int] | None) -> None:
-        """Notify all listeners. Must be called OUTSIDE _lock to avoid deadlocks."""
-        if info is None:
-            return
-        project_id, updated_at = info
-        for cb in self._listeners:
-            try:
-                cb(project_id, updated_at)
-            except Exception:
-                pass
 
     def _find_clip(self, clip_id: str) -> TimelineClip:
         for clip in self._active_timeline().clips:
@@ -355,7 +321,6 @@ class ProjectStore:
             )
             self._persist()
             result = self._active
-        self._notify((result.id, result.updatedAt))
         return result
 
     def peek_project(self, project_id: str) -> Project | None:
@@ -376,21 +341,16 @@ class ProjectStore:
             self._active = Project.model_validate_json(path.read_text(encoding="utf-8"))
             return self._active
 
-    def upsert_project(self, project: Project, *, notify: bool = True) -> Project:
+    def upsert_project(self, project: Project) -> Project:
         """Replace the stored project JSON with the provided state.
 
         Used for keeping the MCP store in sync with frontend edits.
-        Set notify=False to skip SSE notifications (e.g. for frontend→backend sync
-        where the frontend already has the latest state).
         """
         with self._lock:
             project.updatedAt = _now_ms()
             self._active = project
             self._persist()
-            result = self._active
-        if notify:
-            self._notify((result.id, result.updatedAt))
-        return result
+            return self._active
 
     def delete_project(self, project_id: str) -> None:
         """Delete a project from disk and clear active state if it was active."""
@@ -412,9 +372,8 @@ class ProjectStore:
 
     def save(self) -> Project:
         with self._lock:
-            info = self._touch()
+            self._touch()
             result = self.get_active()
-        self._notify(info)
         return result
 
     def list_projects(self) -> list[dict[str, Any]]:
@@ -463,8 +422,7 @@ class ProjectStore:
                 createdAt=_now_ms(),
             )
             self.get_active().assets.append(asset)
-            info = self._touch()
-        self._notify(info)
+            self._touch()
         return asset
 
     def get_asset(self, asset_id: str) -> Asset:
@@ -501,8 +459,7 @@ class ProjectStore:
                 asset=asset,
             )
             self._active_timeline().clips.append(clip)
-            info = self._touch()
-        self._notify(info)
+            self._touch()
         return clip
 
     def remove_clip(self, clip_id: str) -> None:
@@ -512,16 +469,14 @@ class ProjectStore:
             tl.clips = [c for c in tl.clips if c.id != clip_id]
             if len(tl.clips) == before:
                 raise KeyError(f"Clip not found: {clip_id}")
-            info = self._touch()
-        self._notify(info)
+            self._touch()
 
     def move_clip(self, clip_id: str, track_index: int, start_time: float) -> TimelineClip:
         with self._lock:
             clip = self._find_clip(clip_id)
             clip.trackIndex = track_index
             clip.startTime = start_time
-            info = self._touch()
-        self._notify(info)
+            self._touch()
         return clip
 
     def trim_clip(self, clip_id: str, trim_start: float, trim_end: float) -> TimelineClip:
@@ -536,8 +491,7 @@ class ProjectStore:
             clip.trimStart = trim_start
             clip.trimEnd = max(0.0, media_duration - trim_end)
             clip.duration = trim_end - trim_start
-            info = self._touch()
-        self._notify(info)
+            self._touch()
         return clip
 
     def split_clip(self, clip_id: str, split_at_seconds: float) -> tuple[TimelineClip, TimelineClip]:
@@ -585,8 +539,7 @@ class ProjectStore:
                     effects=list(clip.effects),
                 )
                 tl.clips[i : i + 1] = [left, right]
-                info = self._touch()
-                self._notify(info)
+                self._touch()
                 return left, right
             raise KeyError(f"Clip not found: {clip_id}")
 
@@ -606,40 +559,35 @@ class ProjectStore:
             new_speed = max(0.1, min(10.0, speed))
             clip.duration = clip.duration * (old_speed / new_speed)
             clip.speed = new_speed
-            info = self._touch()
-        self._notify(info)
+            self._touch()
         return clip
 
     def set_clip_volume(self, clip_id: str, volume: float) -> TimelineClip:
         with self._lock:
             clip = self._find_clip(clip_id)
             clip.volume = max(0.0, min(1.0, volume))
-            info = self._touch()
-        self._notify(info)
+            self._touch()
         return clip
 
     def set_clip_muted(self, clip_id: str, muted: bool) -> TimelineClip:
         with self._lock:
             clip = self._find_clip(clip_id)
             clip.muted = muted
-            info = self._touch()
-        self._notify(info)
+            self._touch()
         return clip
 
     def reverse_clip(self, clip_id: str, reversed_: bool) -> TimelineClip:
         with self._lock:
             clip = self._find_clip(clip_id)
             clip.reversed = reversed_
-            info = self._touch()
-        self._notify(info)
+            self._touch()
         return clip
 
     def set_clip_opacity(self, clip_id: str, opacity: float) -> TimelineClip:
         with self._lock:
             clip = self._find_clip(clip_id)
             clip.opacity = max(0.0, min(100.0, opacity))
-            info = self._touch()
-        self._notify(info)
+            self._touch()
         return clip
 
     def flip_clip(self, clip_id: str, flip_h: bool, flip_v: bool) -> TimelineClip:
@@ -647,8 +595,7 @@ class ProjectStore:
             clip = self._find_clip(clip_id)
             clip.flipH = flip_h
             clip.flipV = flip_v
-            info = self._touch()
-        self._notify(info)
+            self._touch()
         return clip
 
     def set_clip_motion(self, clip_id: str, motion: KenBurnsMotion | None) -> TimelineClip:
@@ -662,8 +609,7 @@ class ProjectStore:
                 motion.start.focusY = max(0.0, min(100.0, float(motion.start.focusY)))
                 motion.end.focusY = max(0.0, min(100.0, float(motion.end.focusY)))
             clip.motion = motion
-            info = self._touch()
-        self._notify(info)
+            self._touch()
         return clip
 
     def set_clip_color_correction(self, clip_id: str, **kwargs: float) -> TimelineClip:
@@ -674,8 +620,7 @@ class ProjectStore:
                           "tint", "exposure", "highlights", "shadows"):
                 if field in kwargs:
                     setattr(cc, field, max(-100.0, min(100.0, kwargs[field])))
-            info = self._touch()
-        self._notify(info)
+            self._touch()
         return clip
 
     def set_clip_transition(
@@ -690,8 +635,7 @@ class ProjectStore:
                 clip.transitionOut = t
             else:
                 raise ValueError(f"side must be 'in' or 'out', got '{side}'")
-            info = self._touch()
-        self._notify(info)
+            self._touch()
         return clip
 
     def add_clip_effect(
@@ -705,8 +649,7 @@ class ProjectStore:
                 params=params or _default_effect_params(effect_type),
             )
             clip.effects.append(effect)
-            info = self._touch()
-        self._notify(info)
+            self._touch()
         return clip, effect
 
     def remove_clip_effect(self, clip_id: str, effect_id: str) -> TimelineClip:
@@ -716,8 +659,7 @@ class ProjectStore:
             clip.effects = [e for e in clip.effects if e.id != effect_id]
             if len(clip.effects) == before:
                 raise KeyError(f"Effect not found: {effect_id}")
-            info = self._touch()
-        self._notify(info)
+            self._touch()
         return clip
 
     def update_clip_effect(
@@ -728,8 +670,7 @@ class ProjectStore:
             for effect in clip.effects:
                 if effect.id == effect_id:
                     effect.params.update(params)
-                    info = self._touch()
-                    self._notify(info)
+                    self._touch()
                     return clip, effect
             raise KeyError(f"Effect not found: {effect_id}")
 
@@ -804,8 +745,7 @@ class ProjectStore:
                 style=validated_style,
             )
             tl.subtitles.append(sub)
-            info = self._touch()
-        self._notify(info)
+            self._touch()
         return sub
 
     def _add_subtitle_progressive(
@@ -848,8 +788,6 @@ class ProjectStore:
                 first = sub
             cursor = chunk_end
 
-        info = self._touch()
-        self._notify(info)
         assert first is not None
         return first
 
@@ -869,8 +807,7 @@ class ProjectStore:
                         sub.startTime = start_time
                     if end_time is not None:
                         sub.endTime = end_time
-                    info = self._touch()
-                    self._notify(info)
+                    self._touch()
                     return sub
             raise KeyError(f"Subtitle not found: {subtitle_id}")
 
@@ -881,8 +818,7 @@ class ProjectStore:
             tl.subtitles = [s for s in tl.subtitles if s.id != subtitle_id]
             if len(tl.subtitles) == before:
                 raise KeyError(f"Subtitle not found: {subtitle_id}")
-            info = self._touch()
-        self._notify(info)
+            self._touch()
 
     def set_subtitle_style(self, subtitle_id: str, **style_kwargs: object) -> SubtitleClip:
         with self._lock:
@@ -893,8 +829,7 @@ class ProjectStore:
                     for k, v in style_kwargs.items():
                         if hasattr(sub.style, k):
                             setattr(sub.style, k, v)
-                    info = self._touch()
-                    self._notify(info)
+                    self._touch()
                     return sub
             raise KeyError(f"Subtitle not found: {subtitle_id}")
 
@@ -932,8 +867,7 @@ class ProjectStore:
             existing = tl.tracks[abs_index].subtitleStyle or {}
             tl.tracks[abs_index].subtitleStyle = {**existing, **normalized_style, **track_kwargs}
 
-            info = self._touch()
-        self._notify(info)
+            self._touch()
         return updated
 
     def get_subtitles(self) -> list[SubtitleClip]:
@@ -968,8 +902,7 @@ class ProjectStore:
                         s.trackIndex += 1
             else:
                 tl.tracks.append(track)
-            info = self._touch()
-        self._notify(info)
+            self._touch()
         return track
 
     def remove_track(self, track_id: str) -> None:
@@ -990,8 +923,7 @@ class ProjectStore:
             for s in tl.subtitles:
                 if s.trackIndex > idx:
                     s.trackIndex -= 1
-            info = self._touch()
-        self._notify(info)
+            self._touch()
 
     def reorder_track(self, track_id: str, new_position: int) -> list[Track]:
         with self._lock:
@@ -1019,8 +951,7 @@ class ProjectStore:
                     s.trackIndex -= 1
                 elif old_idx > new_pos and new_pos <= s.trackIndex < old_idx:
                     s.trackIndex += 1
-            info = self._touch()
-        self._notify(info)
+            self._touch()
         return list(tl.tracks)
 
     def set_track_properties(self, track_id: str, **kwargs: Any) -> Track:
@@ -1031,8 +962,7 @@ class ProjectStore:
                     for k, v in kwargs.items():
                         if hasattr(track, k) and k != "id":
                             setattr(track, k, v)
-                    info = self._touch()
-                    self._notify(info)
+                    self._touch()
                     return track
             raise KeyError(f"Track not found: {track_id}")
 
@@ -1060,8 +990,7 @@ class ProjectStore:
                 textStyle=text_style,
             )
             self._active_timeline().clips.append(clip)
-            info = self._touch()
-        self._notify(info)
+            self._touch()
         return clip
 
     def update_text_clip_style(self, clip_id: str, **style_kwargs: object) -> TimelineClip:
@@ -1074,8 +1003,7 @@ class ProjectStore:
             for k, v in style_kwargs.items():
                 if hasattr(clip.textStyle, k):
                     setattr(clip.textStyle, k, v)
-            info = self._touch()
-        self._notify(info)
+            self._touch()
         return clip
 
     # ── Generic clip update ──────────────────────────────────────────────────
@@ -1093,8 +1021,7 @@ class ProjectStore:
                     continue
                 if hasattr(clip, k):
                     setattr(clip, k, v)
-            info = self._touch()
-        self._notify(info)
+            self._touch()
         return clip
 
     def retake_clip(self, clip_id: str, take_index: int) -> TimelineClip:
@@ -1137,8 +1064,7 @@ class ProjectStore:
                 except KeyError:
                     pass
 
-            info = self._touch()
-        self._notify(info)
+            self._touch()
         return clip
 
 

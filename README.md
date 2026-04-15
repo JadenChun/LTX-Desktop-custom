@@ -17,14 +17,30 @@ LTX Desktop is an open-source desktop app for generating videos with LTX models 
   <img src="images/timeline-gap-fill.png" alt="Timeline gap fill" width="70%">
 </p>
 
-## Features
+## Fork Contributions — Human-Agent Collaborative Editing
 
-- Text-to-video generation
-- Image-to-video generation
-- Audio-to-video generation
-- Video edit generation (Retake)
-- Video Editor Interface
-- Video Editing Projects
+This fork extends LTX Desktop with a full **MCP (Model Context Protocol) server** that enables AI agents to drive the video editor programmatically, while humans continue to use the GUI — both working on the same project in real time.
+
+### What was built
+
+**MCP stdio server** (`pnpm mcp:stdio`) — a standalone process (no desktop app required) that exposes ~45 structured tools across 7 modules:
+
+| Module | Tools |
+|---|---|
+| `project` | create, open, save, inspect, list projects |
+| `assets` | import media, list and inspect assets |
+| `timeline` | add/remove/move/trim/split clips, set speed, volume, opacity, color correction, transitions, effects |
+| `tracks` | add, remove, reorder, mute/lock tracks |
+| `subtitle` | add/update/remove cues, style tracks, progressive word-splitting |
+| `text_overlay` | add and style title/callout text clips |
+| `export` | start export jobs, poll status |
+| `ai_generation` | generate video, retake, gap-fill, cancel |
+
+**Real-time human↔agent sync** — `electron/mcp-project-store.ts` watches the MCP project directory with `fs.watch` and forwards change events into the renderer via IPC (`onMcpProjectChanged`). When the human edits in the GUI, `putMcpProject` (with optimistic concurrency via `updatedAt`) writes changes back to the shared store, keeping both surfaces in sync.
+
+**Agent timeline inspection** — `preview_frame` and `preview_clip` tools render frame-accurate preview images so the agent can visually verify edits without opening the GUI.
+
+**Frontend MCP project browser** — the home screen discovers and surfaces agent-created projects via `listMcpProjects` IPC, letting humans open and continue editing them in the full GUI.
 
 ## Local vs API mode
 
@@ -133,6 +149,9 @@ graph TD
   BE --> EXT["External APIs (only for API-backed features)"]
   EL --> DATA["App data folder (settings/models/logs)"]
   BE --> DATA
+  Agent["AI Agent"] -->|MCP stdio| MCP["MCP server (stdio)"]
+  MCP --> DATA
+  EL -->|fs.watch + IPC| UI
 ```
 
 ## Development (quickstart)
@@ -181,21 +200,37 @@ Building installers:
 
 ## AI Assistant / MCP Setup
 
-LTX Desktop now exposes MCP as a standalone `stdio` server. The desktop app does not need to be open for an agent to use MCP.
+LTX Desktop exposes MCP as a standalone `stdio` server. The desktop app does not need to be open for an agent to use MCP tools — but if it is open, agent edits appear in the GUI in real time.
 
-Development launch:
+### Architecture
+
+```mermaid
+graph TD
+  Agent["AI Agent (Claude / Cursor / Codex)"] -->|MCP stdio| MCP["MCP stdio server\n(pnpm mcp:stdio)"]
+  MCP -->|writes projects| Store["MCP Project Store\n(disk)"]
+  Electron["Electron main"] -->|fs.watch| Store
+  Electron -->|IPC: onMcpProjectChanged| UI["Renderer (React UI)"]
+  UI -->|IPC: putMcpProject| Electron
+  Electron -->|upsert + optimistic concurrency| Store
+```
+
+The agent and human share the same on-disk `ProjectStore`. Electron watches the directory with `fs.watch` and pushes change events to the renderer via IPC. When the human edits in the GUI, `putMcpProject` (with `updatedAt` optimistic concurrency) writes changes back without clobbering in-flight agent edits.
+
+### Launch
+
+Development:
 
 ```bash
 pnpm mcp:stdio
 ```
 
-Packaged launch:
+Packaged:
 
 ```bash
 ltx-desktop mcp stdio
 ```
 
-Example MCP client configuration:
+### Client configuration
 
 ```json
 {
@@ -208,15 +243,12 @@ Example MCP client configuration:
 }
 ```
 
-Repository guidance files:
+### Repository guidance files
 
-- [`AGENTS.md`](AGENTS.md) - shared repo instructions
-- [`.codex/skills/ltx-video-editor-development/SKILL.md`](.codex/skills/ltx-video-editor-development/SKILL.md) - Codex skill entrypoint
-- [`.claude/skills/video-editor-development/SKILL.md`](.claude/skills/video-editor-development/SKILL.md) - Claude skill entrypoint
-- [`.cursor/skills/video-editor-development/SKILL.md`](.cursor/skills/video-editor-development/SKILL.md) - Cursor skill entrypoint
-- [`docs/skills/video-editor-development.md`](docs/skills/video-editor-development.md) - shared editor architecture guidance
-- [`docs/AGENT_PREVIEW_TOOLING_PLAN.md`](docs/AGENT_PREVIEW_TOOLING_PLAN.md) - architecture plan for agent timeline inspection and preview tools
-- [`docs/AGENT_PREVIEW_TOOLING_CHECKLIST.md`](docs/AGENT_PREVIEW_TOOLING_CHECKLIST.md) - execution checklist for implementing the preview tooling roadmap
+- [`AGENTS.md`](AGENTS.md) — shared repo instructions for AI agents
+- [`docs/AGENT_PREVIEW_TOOLING_PLAN.md`](docs/AGENT_PREVIEW_TOOLING_PLAN.md) — architecture plan for agent timeline inspection and preview tools
+- [`docs/AGENT_PREVIEW_TOOLING_CHECKLIST.md`](docs/AGENT_PREVIEW_TOOLING_CHECKLIST.md) — implementation checklist for preview tooling
+- [`docs/skills/video-editor-development.md`](docs/skills/video-editor-development.md) — shared editor architecture guidance
 
 ## Telemetry
 
