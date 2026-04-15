@@ -19,6 +19,7 @@ export function getAllowedRoots(): string[] {
   const roots = [
     getCurrentDir(),
     app.getPath('userData'),
+    app.getPath('documents'),
     app.getPath('downloads'),
     os.tmpdir(),
   ]

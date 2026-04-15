@@ -63,7 +63,7 @@ export function PythonSetup({ onReady }: PythonSetupProps) {
       if (p.status === 'complete') {
         onReady()
       } else if (p.status === 'error') {
-        setError('Download failed. Please check your internet connection and try again.')
+        setError('Python setup failed. Please reinstall the app and try again.')
       }
     })
     return () => {
@@ -83,11 +83,11 @@ export function PythonSetup({ onReady }: PythonSetupProps) {
     try {
       await window.electronAPI.startPythonSetup()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to download Python environment.')
+      setError(e instanceof Error ? e.message : 'Failed to prepare the bundled Python environment.')
     }
   }
 
-  const statusLabel = progress?.status === 'extracting' ? 'Extracting...' : 'Downloading Python environment...'
+  const statusLabel = progress?.status === 'extracting' ? 'Preparing bundled runtime...' : 'Preparing Python environment...'
   const percent = progress?.percent ?? 0
 
   return (
@@ -258,7 +258,7 @@ export function PythonSetup({ onReady }: PythonSetupProps) {
                   <span style={{ flex: 1 }}>
                     {progress?.status === 'extracting'
                       ? 'Setting up Python environment...'
-                      : 'First-time setup — this only happens once'}
+                      : 'Verifying bundled runtime — this only happens once'}
                   </span>
 
                   <div style={{ display: 'flex', gap: 16, marginLeft: 16, flexShrink: 0 }}>

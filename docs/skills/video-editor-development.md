@@ -72,6 +72,15 @@ Use this split when deciding where a new field belongs.
 - Actions own editor invariants and behaviorally significant transitions.
 - Do not hide product rules in `useEffect` when they really belong in an action.
 
+## Subtitle And Text Clip Semantics
+
+Keep subtitle cues and text clips as separate product concepts.
+
+- Use subtitle tracks and subtitle cues for spoken captions, transcript text, karaoke-style progressive captions, and anything that should behave like subtitles in the editor or export path.
+- Use text clips for designed on-screen text such as titles, lower thirds, labels, badges, callouts, and other editorial overlays.
+- Do not fake subtitles with text clips unless the product requirement explicitly asks for a stylized non-subtitle treatment.
+- If an agent-facing tool or workflow needs timed caption text, prefer subtitle tools first and only reach for text clips when the request is clearly about graphic text treatment rather than captions.
+
 Examples of the intended pattern:
 
 - timeline switching behavior belongs in `switchActiveTimeline(...)`

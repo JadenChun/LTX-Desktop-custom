@@ -41,13 +41,19 @@ class SettingsHandler(StateHandlerBase):
                     migrated,
                 )
                 loaded = AppSettings.model_validate(merged)
-                logger.info("Settings loaded from %s", settings_file)
                 self.state.app_settings = loaded
+                # Write back immediately so the file always reflects the current
+                # schema (adds new fields with defaults, cleans up removed fields).
+                # This prevents settings loss when schema fields are added/removed
+                # and the app runs before the file is updated.
+                self.save_settings()
+                logger.info("Settings loaded from %s", settings_file)
                 return loaded
             except Exception as exc:
                 logger.warning("Could not load settings: %s", exc, exc_info=True)
 
         self.state.app_settings = default_settings.model_copy(deep=True)
+        self.save_settings()
         return self.state.app_settings
 
     def save_settings(self) -> None:

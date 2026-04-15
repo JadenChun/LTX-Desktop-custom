@@ -1,4 +1,4 @@
-import { execFile } from 'child_process'
+import { execFile, execFileSync } from 'child_process'
 import { app } from 'electron'
 import fs from 'fs'
 import http from 'http'
@@ -21,25 +21,167 @@ interface ArchiveManifest {
   totalSize: number
 }
 
+interface ReleaseSourceConfig {
+  owner: string
+  repo: string
+  host: string
+}
+
+interface RuntimeValidationResult {
+  ok: boolean
+  details?: string
+}
+
+interface ArchiveSourceAttempt {
+  url: string
+  label: string
+  attempts?: number
+}
+
+const RUNTIME_VALIDATION_SCRIPT = `
+import importlib
+import traceback
+
+checks = [
+    ("mcp.server.fastmcp", "FastMCP"),
+    ("fastapi", None),
+    ("uvicorn", None),
+]
+
+for module_name, attr_name in checks:
+    try:
+        module = importlib.import_module(module_name)
+        if attr_name is not None:
+            getattr(module, attr_name)
+    except Exception:
+        target = module_name if attr_name is None else f"{module_name}.{attr_name}"
+        print(f"FAILED_IMPORT={target}")
+        traceback.print_exc()
+        raise
+`
+
+const RUNTIME_REPAIR_PACKAGES = [
+  'fastapi>=0.115.0',
+  'uvicorn[standard]>=0.30.0',
+  'mcp[cli]>=1.0.0',
+  'python-multipart>=0.0.9',
+]
+
 // ── GitHub private repo authentication ────────────────────────────────
 // Mirrors electron-updater: only sends GH_TOKEN when `private: true` is set
 // in the publish config (app-update.yml). This prevents accidental token leaks
 // for public repos.
 
 let _authHeaders: Record<string, string> | null = null
+let _releaseSourceConfig: ReleaseSourceConfig | null = null
+
+function getUpdateConfigPath(): string {
+  return isDev
+    ? path.join(process.cwd(), 'dev-app-update.yml')
+    : path.join(process.resourcesPath, 'app-update.yml')
+}
+
+function readUpdateConfig(): Record<string, unknown> | null {
+  try {
+    return loadYaml(fs.readFileSync(getUpdateConfigPath(), 'utf-8')) as Record<string, unknown>
+  } catch {
+    return null
+  }
+}
+
+function parseGitHubHomepage(homepage: string): ReleaseSourceConfig | null {
+  try {
+    const url = new URL(homepage)
+    if (!/github\.com$/i.test(url.hostname)) {
+      return null
+    }
+    const parts = url.pathname.split('/').filter(Boolean)
+    if (parts.length < 2) {
+      return null
+    }
+    return {
+      owner: parts[0],
+      repo: parts[1],
+      host: url.host,
+    }
+  } catch {
+    return null
+  }
+}
+
+function readPackageHomepageReleaseSource(): ReleaseSourceConfig | null {
+  try {
+    const packageJsonPath = isDev
+      ? path.join(process.cwd(), 'package.json')
+      : path.join(app.getAppPath(), 'package.json')
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8')) as { homepage?: unknown }
+    if (typeof packageJson.homepage !== 'string' || !packageJson.homepage) {
+      return null
+    }
+    return parseGitHubHomepage(packageJson.homepage)
+  } catch {
+    return null
+  }
+}
+
+function getReleaseSourceConfig(): ReleaseSourceConfig {
+  if (_releaseSourceConfig) {
+    return _releaseSourceConfig
+  }
+
+  const envOwner = process.env.LTX_RELEASE_OWNER?.trim()
+  const envRepo = process.env.LTX_RELEASE_REPO?.trim()
+  const envHost = process.env.LTX_RELEASE_HOST?.trim()
+  if (envOwner && envRepo) {
+    _releaseSourceConfig = {
+      owner: envOwner,
+      repo: envRepo,
+      host: envHost || 'github.com',
+    }
+    return _releaseSourceConfig
+  }
+
+  const updateConfig = readUpdateConfig()
+  const provider = typeof updateConfig?.provider === 'string' ? updateConfig.provider.trim() : ''
+  const owner = typeof updateConfig?.owner === 'string' ? updateConfig.owner.trim() : ''
+  const repo = typeof updateConfig?.repo === 'string' ? updateConfig.repo.trim() : ''
+  const host = typeof updateConfig?.host === 'string' ? updateConfig.host.trim() : ''
+  if (provider === 'github' && owner && repo) {
+    _releaseSourceConfig = {
+      owner,
+      repo,
+      host: host || 'github.com',
+    }
+    return _releaseSourceConfig
+  }
+
+  const homepageSource = readPackageHomepageReleaseSource()
+  if (homepageSource) {
+    _releaseSourceConfig = homepageSource
+    return _releaseSourceConfig
+  }
+
+  _releaseSourceConfig = {
+    owner: 'Lightricks',
+    repo: 'ltx-desktop',
+    host: 'github.com',
+  }
+  return _releaseSourceConfig
+}
+
+function getGitHubReleaseBase(version: string): string {
+  const { owner, repo, host } = getReleaseSourceConfig()
+  return `https://${host}/${owner}/${repo}/releases/download/v${version}`
+}
 
 function getAuthHeaders(): Record<string, string> {
   if (_authHeaders !== null) return _authHeaders
 
   _authHeaders = {}
 
-  const configPath = isDev
-    ? path.join(process.cwd(), 'dev-app-update.yml')
-    : path.join(process.resourcesPath, 'app-update.yml')
-
   let isPrivate = false
   try {
-    const config = loadYaml(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>
+    const config = readUpdateConfig()
     isPrivate = config?.private === true
   } catch { /* no config file — public repo */ }
 
@@ -64,59 +206,179 @@ function getInstalledHashPath(): string {
   return path.join(app.getPath('userData'), 'python', 'deps-hash.txt')
 }
 
+function getRuntimePythonExecutable(pythonDir = getPythonDir()): string {
+  return process.platform === 'win32'
+    ? path.join(pythonDir, 'python.exe')
+    : path.join(pythonDir, 'bin', 'python3')
+}
+
+function getPythonCommandEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    PYTHONNOUSERSITE: '1',
+  }
+}
+
+function normalizeExecOutput(value: unknown): string {
+  if (typeof value === 'string') {
+    return value.trim()
+  }
+  if (Buffer.isBuffer(value)) {
+    return value.toString('utf-8').trim()
+  }
+  return ''
+}
+
+function truncateDetail(text: string, maxChars = 1600): string {
+  const trimmed = text.trim()
+  if (trimmed.length <= maxChars) {
+    return trimmed
+  }
+  return `${trimmed.slice(0, maxChars)}...`
+}
+
+function validateRuntimeModules(pythonPath: string): RuntimeValidationResult {
+  if (!fs.existsSync(pythonPath)) {
+    return { ok: false, details: `Python executable not found at ${pythonPath}` }
+  }
+
+  try {
+    execFileSync(
+      pythonPath,
+      ['-c', RUNTIME_VALIDATION_SCRIPT],
+      {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        encoding: 'utf-8',
+        env: getPythonCommandEnv(),
+        maxBuffer: 2 * 1024 * 1024,
+      }
+    )
+    return { ok: true }
+  } catch (error) {
+    const err = error as Error & { stdout?: string | Buffer; stderr?: string | Buffer }
+    const stdout = normalizeExecOutput(err.stdout)
+    const stderr = normalizeExecOutput(err.stderr)
+    const detailParts = [
+      stdout ? `stdout: ${truncateDetail(stdout)}` : '',
+      stderr ? `stderr: ${truncateDetail(stderr)}` : '',
+      err.message ? `error: ${truncateDetail(err.message)}` : '',
+    ].filter(Boolean)
+    const details = detailParts.join(' | ') || 'Unknown validation failure'
+    logger.warn( `[python-setup] Python runtime validation failed for ${pythonPath}: ${details}`)
+    return { ok: false, details }
+  }
+}
+
+function hasRequiredRuntimeModules(pythonPath: string): boolean {
+  return validateRuntimeModules(pythonPath).ok
+}
+
+function execFileWithCapture(file: string, args: string[], timeoutMs: number): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      file,
+      args,
+      {
+        encoding: 'utf-8',
+        env: getPythonCommandEnv(),
+        maxBuffer: 10 * 1024 * 1024,
+        timeout: timeoutMs,
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          const err = error as Error & { stdout?: string; stderr?: string }
+          err.stdout = stdout
+          err.stderr = stderr
+          reject(err)
+          return
+        }
+        resolve({ stdout, stderr })
+      }
+    )
+  })
+}
+
+async function repairRuntimeModules(pythonPath: string): Promise<{ ok: boolean; details: string }> {
+  try {
+    const { stdout, stderr } = await execFileWithCapture(
+      pythonPath,
+      [
+        '-m',
+        'pip',
+        'install',
+        '--upgrade',
+        '--disable-pip-version-check',
+        '--no-warn-script-location',
+        ...RUNTIME_REPAIR_PACKAGES,
+      ],
+      10 * 60 * 1000
+    )
+    const detailParts = [
+      stdout ? `stdout: ${truncateDetail(stdout)}` : '',
+      stderr ? `stderr: ${truncateDetail(stderr)}` : '',
+    ].filter(Boolean)
+    const details = detailParts.join(' | ') || 'pip repair completed successfully'
+    logger.info( `[python-setup] Runtime repair completed for ${pythonPath}: ${details}`)
+    return { ok: true, details }
+  } catch (error) {
+    const err = error as Error & { stdout?: string; stderr?: string }
+    const stdout = normalizeExecOutput(err.stdout)
+    const stderr = normalizeExecOutput(err.stderr)
+    const detailParts = [
+      stdout ? `stdout: ${truncateDetail(stdout)}` : '',
+      stderr ? `stderr: ${truncateDetail(stderr)}` : '',
+      err.message ? `error: ${truncateDetail(err.message)}` : '',
+    ].filter(Boolean)
+    const details = detailParts.join(' | ') || 'pip repair failed'
+    logger.warn( `[python-setup] Runtime repair failed for ${pythonPath}: ${details}`)
+    return { ok: false, details }
+  }
+}
+
+function formatRuntimeSetupError(args: {
+  archiveHash: string | null
+  expectedHash: string | null
+  validationDetails: string
+  repairDetails?: string
+}): string {
+  const parts = ['Downloaded Python environment validation failed.']
+
+  if (args.archiveHash && args.expectedHash && args.archiveHash !== args.expectedHash) {
+    parts.push(`Downloaded runtime hash ${args.archiveHash} does not match app hash ${args.expectedHash}.`)
+  } else if (!args.archiveHash && args.expectedHash) {
+    parts.push(`Downloaded runtime archive did not include deps-hash.txt (expected ${args.expectedHash}).`)
+  }
+
+  parts.push(`Validation details: ${args.validationDetails}`)
+
+  if (args.repairDetails) {
+    parts.push(`Repair attempt: ${args.repairDetails}`)
+  }
+
+  return parts.join(' ')
+}
+
 /** Directory where python-embed lives at runtime. */
 export function getPythonDir(): string {
-  if (process.platform === 'win32' || process.platform === 'linux') {
-    if (isDev) {
-      return path.join(process.cwd(), 'python-embed')
-    }
-    return path.join(app.getPath('userData'), 'python')
+  if (isDev) {
+    return path.join(process.cwd(), 'python-embed')
   }
-  // macOS: bundled in resources
+
+  // Packaged builds ship with a fully bundled runtime for offline installs.
   return path.join(process.resourcesPath, 'python')
 }
 
 /**
  * Check whether the Python environment is ready to use.
- * Also promotes a staged python-next/ directory if it matches the expected hash.
  */
 export function isPythonReady(): { ready: boolean } {
-  if (process.platform === 'darwin') {
-    return { ready: true }
-  }
-
   if (isDev) {
     return { ready: true }
   }
 
-  const bundledHash = readHash(getBundledHashPath())
+  const pythonExe = getRuntimePythonExecutable()
 
-  // Check if a pre-downloaded python-next/ is waiting to be promoted
-  const nextDir = path.join(app.getPath('userData'), 'python-next')
-  const nextHash = readHash(path.join(nextDir, 'deps-hash.txt'))
-  if (bundledHash && nextHash && bundledHash === nextHash) {
-    logger.info( '[python-setup] Promoting staged python-next/ to python/')
-    try {
-      const destDir = path.join(app.getPath('userData'), 'python')
-      if (fs.existsSync(destDir)) {
-        fs.rmSync(destDir, { recursive: true, force: true })
-      }
-      fs.renameSync(nextDir, destDir)
-      return { ready: true }
-    } catch (err) {
-      logger.error( `[python-setup] Failed to promote staged python: ${err}`)
-      // Fall through to normal check
-    }
-  }
-
-  const installedHash = readHash(getInstalledHashPath())
-
-  if (!bundledHash) {
-    const pythonExe = path.join(getPythonDir(), process.platform === 'win32' ? 'python.exe' : 'bin/python3')
-    return { ready: fs.existsSync(pythonExe) }
-  }
-
-  return { ready: bundledHash === installedHash }
+  return { ready: hasRequiredRuntimeModules(pythonExe) }
 }
 
 /**
@@ -128,105 +390,31 @@ export async function preDownloadPythonForUpdate(
   newVersion: string,
   onProgress?: (progress: PythonSetupProgress) => void
 ): Promise<boolean> {
-  if (process.platform === 'darwin') {
-    return false
-  }
+  void newVersion
+  void onProgress
+  return false
+}
 
-  const baseUrl = (isDev && process.env.LTX_PYTHON_URL?.replace(/^["']+|["']+$/g, ''))
-    || `https://github.com/Lightricks/ltx-desktop/releases/download/v${newVersion}`
+export async function downloadPythonEmbed(
+  onProgress: (progress: PythonSetupProgress) => void
+): Promise<void> {
+  if (!isDev) {
+    const pythonExe = getRuntimePythonExecutable()
+    const validationResult = validateRuntimeModules(pythonExe)
 
-  // Fetch the new version's deps hash
-  let newHash: string | null = null
-  if (isLocalPath(baseUrl)) {
-    // Local testing: read hash from the directory or the archive's extracted deps-hash.txt
-    const hashFile = baseUrl.endsWith('.tar.gz')
-      ? null // Can't read hash from a single tar.gz without extracting
-      : path.join(baseUrl, 'deps-hash.txt')
-    newHash = hashFile ? readHash(hashFile) : null
-  } else {
-    const hashUrl = `${baseUrl}/python-deps-hash.txt`
-    const hashDest = path.join(app.getPath('userData'), 'python-next-hash-check.txt')
-    try {
-      await downloadFileRaw(hashUrl, hashDest)
-      newHash = readHash(hashDest)
-    } catch (err) {
-      logger.warn( `[python-setup] Could not fetch new version deps hash: ${err}`)
-    } finally {
-      try { fs.unlinkSync(hashDest) } catch { /* ignore */ }
-    }
-  }
-
-  if (!newHash) {
-    logger.info( '[python-setup] No deps hash available for new version, skipping pre-download')
-    return false
-  }
-
-  // Compare with currently installed hash
-  const installedHash = readHash(getInstalledHashPath())
-  if (newHash === installedHash) {
-    logger.info( '[python-setup] Python deps unchanged in new version, no pre-download needed')
-    return false
-  }
-
-  logger.info( `[python-setup] Python deps changed (${installedHash} → ${newHash}), pre-downloading`)
-
-  // Download to python-next/
-  const nextDir = path.join(app.getPath('userData'), 'python-next')
-  const tempDir = path.join(app.getPath('userData'), 'python-next-tmp')
-  const archivePath = path.join(app.getPath('userData'), 'python-next.tar.gz')
-
-  try {
-    if (fs.existsSync(nextDir)) fs.rmSync(nextDir, { recursive: true, force: true })
-    if (fs.existsSync(tempDir)) fs.rmSync(tempDir, { recursive: true, force: true })
-  } catch { /* ignore */ }
-
-  fs.mkdirSync(tempDir, { recursive: true })
-
-  const cleanupFiles: string[] = []
-  const noop = () => {}
-  const progressCb = onProgress || noop
-
-  try {
-    try {
-      await acquireArchive(baseUrl, archivePath, cleanupFiles, progressCb)
-    } catch (primaryErr) {
-      const prefix = getPythonArchivePrefix()
-      const fallbackUrl = newHash ? `${FALLBACK_CDN_BASE}/${prefix}/${newHash}/${prefix}.tar.gz` : null
-      if (!fallbackUrl || isLocalPath(baseUrl)) {
-        throw primaryErr
-      }
-      logger.warn( `[python-setup] Pre-download primary failed: ${primaryErr}`)
-      logger.info( `[python-setup] Falling back to CDN: ${fallbackUrl}`)
-      try { fs.unlinkSync(archivePath) } catch { /* ignore */ }
-      for (const f of cleanupFiles) { try { fs.unlinkSync(f) } catch { /* ignore */ } }
-      cleanupFiles.length = 0
-      await acquireArchive(fallbackUrl, archivePath, cleanupFiles, progressCb)
+    if (!validationResult.ok) {
+      throw new Error(
+        `Bundled Python environment is not ready. ${validationResult.details || 'Missing required runtime modules.'}`
+      )
     }
 
-    await extractTarGz(archivePath, tempDir)
-
-    const extractedInner = path.join(tempDir, 'python-embed')
-    const extractedSource = fs.existsSync(extractedInner) ? extractedInner : tempDir
-
-    if (fs.existsSync(nextDir)) fs.rmSync(nextDir, { recursive: true, force: true })
-    fs.renameSync(extractedSource, nextDir)
-
-    // Write the new hash into python-next/ so isPythonReady can verify it on next launch
-    fs.writeFileSync(path.join(nextDir, 'deps-hash.txt'), newHash)
-
-    logger.info( '[python-setup] Pre-download complete, staged at python-next/')
-    return true
-  } catch (err) {
-    logger.error( `[python-setup] Pre-download failed: ${err}`)
-    try { fs.rmSync(nextDir, { recursive: true, force: true }) } catch { /* ignore */ }
-    return false
-  } finally {
-    try { fs.unlinkSync(archivePath) } catch { /* ignore */ }
-    for (const f of cleanupFiles) {
-      try { fs.unlinkSync(f) } catch { /* ignore */ }
-    }
-    try { if (fs.existsSync(tempDir)) fs.rmSync(tempDir, { recursive: true, force: true }) } catch { /* ignore */ }
+    onProgress({ status: 'extracting', percent: 100, downloadedBytes: 0, totalBytes: 0, speed: 0 })
+    onProgress({ status: 'complete', percent: 100, downloadedBytes: 0, totalBytes: 0, speed: 0 })
+    logger.info('[python-setup] Using bundled Python runtime from app resources')
+    return
   }
+
+  await downloadPythonEmbedRuntime(onProgress)
 }
 
 function readHash(filePath: string): string | null {
@@ -241,7 +429,7 @@ function readHash(filePath: string): string | null {
 // Primary: GitHub Releases (multi-part, version-based)
 // Fallback: public CDN bucket (single file, deps-hash-based)
 
-const FALLBACK_CDN_BASE = 'https://storage.googleapis.com/ltx-desktop-artifacts'
+const DEFAULT_UPSTREAM_CDN_BASE = 'https://storage.googleapis.com/ltx-desktop-artifacts'
 
 function getPythonArchivePrefix(): string {
   if (process.platform === 'win32') return 'python-embed-win32'
@@ -260,14 +448,37 @@ function getArchiveBase(): string {
     return process.env.LTX_PYTHON_URL.replace(/^["']+|["']+$/g, '')
   }
   const version = app.getVersion()
-  return `https://github.com/Lightricks/ltx-desktop/releases/download/v${version}`
+  return getGitHubReleaseBase(version)
+}
+
+function getArchiveCdnBase(): string | null {
+  const explicit = process.env.LTX_RELEASE_CDN_BASE?.trim()
+  if (explicit) {
+    return explicit.replace(/\/+$/, '')
+  }
+
+  const { owner, repo } = getReleaseSourceConfig()
+  if (owner === 'Lightricks' && repo.toLowerCase() === 'ltx-desktop') {
+    return DEFAULT_UPSTREAM_CDN_BASE
+  }
+
+  return null
 }
 
 function getFallbackArchiveUrl(): string | null {
+  const cdnBase = getArchiveCdnBase()
+  if (!cdnBase) return null
   const hash = readHash(getBundledHashPath())
   if (!hash) return null
   const prefix = getPythonArchivePrefix()
-  return `${FALLBACK_CDN_BASE}/${prefix}/${hash}/${prefix}.tar.gz`
+  return `${cdnBase}/${prefix}/${hash}/${prefix}.tar.gz`
+}
+
+function getGitHubSingleFileArchiveUrl(base: string): string | null {
+  if (!base.includes('/releases/download/')) {
+    return null
+  }
+  return `${base}/${getPythonArchivePrefix()}.tar.gz`
 }
 
 function isLocalPath(source: string): boolean {
@@ -284,8 +495,32 @@ async function acquireArchive(
   cleanupFiles: string[],
   onProgress: (progress: PythonSetupProgress) => void
 ): Promise<void> {
-  if (isLocalPath(base) && base.endsWith('.tar.gz')) {
-    await copyFileWithProgress(base, archivePath, 0, fs.statSync(base).size, onProgress)
+  if (base.endsWith('.tar.gz')) {
+    if (isLocalPath(base)) {
+      await copyFileWithProgress(base, archivePath, 0, fs.statSync(base).size, onProgress)
+    } else {
+      let lastTime = Date.now()
+      let lastBytes = 0
+      let speed = 0
+
+      await downloadFileWithGlobalProgress(base, archivePath, 0, 0, (downloaded, totalBytes) => {
+        const now = Date.now()
+        const elapsed = (now - lastTime) / 1000
+        if (elapsed >= 1) {
+          speed = (downloaded - lastBytes) / elapsed
+          lastTime = now
+          lastBytes = downloaded
+        }
+
+        onProgress({
+          status: 'downloading',
+          percent: totalBytes > 0 ? Math.round((downloaded / totalBytes) * 100) : 0,
+          downloadedBytes: downloaded,
+          totalBytes,
+          speed,
+        })
+      })
+    }
   } else if (isLocalPath(base)) {
     await acquirePartsLocal(base, archivePath, cleanupFiles, onProgress)
   } else if (base.includes('/releases/download/')) {
@@ -317,11 +552,75 @@ async function acquireArchive(
   }
 }
 
+function cleanupArchiveArtifacts(archivePath: string, cleanupFiles: string[]): void {
+  try { fs.unlinkSync(archivePath) } catch { /* ignore */ }
+  for (const file of cleanupFiles) {
+    try { fs.unlinkSync(file) } catch { /* ignore */ }
+  }
+  cleanupFiles.length = 0
+}
+
+function resetDirectory(dirPath: string): void {
+  try {
+    if (fs.existsSync(dirPath)) {
+      fs.rmSync(dirPath, { recursive: true, force: true })
+    }
+  } catch { /* ignore */ }
+  fs.mkdirSync(dirPath, { recursive: true })
+}
+
+function verifyFileSize(filePath: string, expectedSize: number, label: string): void {
+  let stats: fs.Stats
+  try {
+    stats = fs.statSync(filePath)
+  } catch (error) {
+    throw new Error(`${label} missing after download: ${error}`)
+  }
+
+  if (stats.size !== expectedSize) {
+    throw new Error(`${label} size mismatch: expected ${expectedSize} bytes, got ${stats.size}`)
+  }
+}
+
+async function downloadAndExtractArchiveFromSources(
+  sources: ArchiveSourceAttempt[],
+  archivePath: string,
+  tempDir: string,
+  cleanupFiles: string[],
+  onProgress: (progress: PythonSetupProgress) => void
+): Promise<void> {
+  const errors: string[] = []
+
+  for (const source of sources) {
+    const attempts = Math.max(1, source.attempts ?? 1)
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        cleanupArchiveArtifacts(archivePath, cleanupFiles)
+        resetDirectory(tempDir)
+
+        logger.info( `[python-setup] Downloading archive from ${source.label} (attempt ${attempt}/${attempts}): ${source.url}`)
+        await acquireArchive(source.url, archivePath, cleanupFiles, onProgress)
+
+        onProgress({ status: 'extracting', percent: 100, downloadedBytes: 0, totalBytes: 0, speed: 0 })
+        logger.info( `[python-setup] Extracting archive from ${source.label} (attempt ${attempt}/${attempts}) to: ${tempDir}`)
+        await extractTarGz(archivePath, tempDir)
+        return
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        errors.push(`${source.label} attempt ${attempt}/${attempts}: ${detail}`)
+        logger.warn( `[python-setup] Archive attempt failed for ${source.label} (${attempt}/${attempts}): ${detail}`)
+      }
+    }
+  }
+
+  throw new Error(`All Python archive sources failed. ${errors.join(' | ')}`)
+}
+
 /**
  * Download (or copy) python-embed archive and extract to userData/python/.
  * Tries GitHub Releases first, falls back to CDN if available.
  */
-export async function downloadPythonEmbed(
+async function downloadPythonEmbedRuntime(
   onProgress: (progress: PythonSetupProgress) => void
 ): Promise<void> {
   const destDir = path.join(app.getPath('userData'), 'python')
@@ -341,33 +640,17 @@ export async function downloadPythonEmbed(
   try {
     const base = getArchiveBase()
     logger.info( `[python-setup] Archive base: ${base}`)
-
-    try {
-      await acquireArchive(base, archivePath, cleanupFiles, onProgress)
-    } catch (primaryErr) {
-      // Primary source failed — try CDN fallback
-      const fallbackUrl = getFallbackArchiveUrl()
-      if (!fallbackUrl || isLocalPath(base)) {
-        throw primaryErr
-      }
-
-      logger.warn( `[python-setup] Primary download failed: ${primaryErr}`)
-      logger.info( `[python-setup] Falling back to CDN: ${fallbackUrl}`)
-
-      // Clean up any partial primary download
-      try { fs.unlinkSync(archivePath) } catch { /* ignore */ }
-      for (const f of cleanupFiles) {
-        try { fs.unlinkSync(f) } catch { /* ignore */ }
-      }
-      cleanupFiles.length = 0
-
-      await acquireArchive(fallbackUrl, archivePath, cleanupFiles, onProgress)
+    const fallbackUrl = getFallbackArchiveUrl()
+    const sources: ArchiveSourceAttempt[] = [{ url: base, label: 'primary', attempts: 2 }]
+    const singleFileUrl = getGitHubSingleFileArchiveUrl(base)
+    if (singleFileUrl && singleFileUrl !== base) {
+      sources.push({ url: singleFileUrl, label: 'github-single-file' })
+    }
+    if (fallbackUrl && !isLocalPath(base) && fallbackUrl !== base) {
+      sources.push({ url: fallbackUrl, label: 'cdn-fallback' })
     }
 
-    // Extract
-    onProgress({ status: 'extracting', percent: 100, downloadedBytes: 0, totalBytes: 0, speed: 0 })
-    logger.info( `[python-setup] Extracting to: ${tempDir}`)
-    await extractTarGz(archivePath, tempDir)
+    await downloadAndExtractArchiveFromSources(sources, archivePath, tempDir, cleanupFiles, onProgress)
 
     // Move into place (archive has top-level `python-embed/` directory)
     const extractedInner = path.join(tempDir, 'python-embed')
@@ -377,6 +660,38 @@ export async function downloadPythonEmbed(
       fs.rmSync(destDir, { recursive: true, force: true })
     }
     fs.renameSync(extractedSource, destDir)
+
+    const pythonExe = getRuntimePythonExecutable(destDir)
+    const expectedHash = readHash(getBundledHashPath())
+    const archiveHash = readHash(path.join(destDir, 'deps-hash.txt'))
+
+    if (archiveHash && expectedHash && archiveHash !== expectedHash) {
+      logger.warn(
+        `[python-setup] Downloaded runtime hash mismatch: archive=${archiveHash} expected=${expectedHash}`
+      )
+    } else if (!archiveHash && expectedHash) {
+      logger.warn(
+        `[python-setup] Downloaded runtime archive is missing deps-hash.txt (expected ${expectedHash})`
+      )
+    }
+
+    let validationResult = validateRuntimeModules(pythonExe)
+    let repairDetails: string | undefined
+    if (!validationResult.ok) {
+      logger.info( '[python-setup] Attempting to repair downloaded runtime modules via pip')
+      const repairResult = await repairRuntimeModules(pythonExe)
+      repairDetails = repairResult.details
+      validationResult = validateRuntimeModules(pythonExe)
+    }
+
+    if (!validationResult.ok) {
+      throw new Error(formatRuntimeSetupError({
+        archiveHash,
+        expectedHash,
+        validationDetails: validationResult.details || 'Missing required runtime modules.',
+        repairDetails,
+      }))
+    }
 
     // Write deps hash so subsequent launches skip download
     const bundledHash = getBundledHashPath()
@@ -391,10 +706,7 @@ export async function downloadPythonEmbed(
     try { fs.rmSync(destDir, { recursive: true, force: true }) } catch { /* ignore */ }
     throw err
   } finally {
-    try { fs.unlinkSync(archivePath) } catch { /* ignore */ }
-    for (const f of cleanupFiles) {
-      try { fs.unlinkSync(f) } catch { /* ignore */ }
-    }
+    cleanupArchiveArtifacts(archivePath, cleanupFiles)
     try { if (fs.existsSync(tempDir)) fs.rmSync(tempDir, { recursive: true, force: true }) } catch { /* ignore */ }
   }
 }
@@ -420,10 +732,12 @@ async function acquirePartsLocal(
     cleanupFiles.push(dest)
 
     await copyFileWithProgress(src, dest, bytesSoFar, manifest.totalSize, onProgress)
+    verifyFileSize(dest, part.size, `local part ${part.name}`)
     bytesSoFar += part.size
   }
 
   await concatenateParts(partPaths, archivePath)
+  verifyFileSize(archivePath, manifest.totalSize, 'assembled local archive')
 }
 
 // ── Multi-part: remote download ──────────────────────────────────────
@@ -479,10 +793,12 @@ async function acquirePartsRemote(
       }
     )
 
+    verifyFileSize(partDest, part.size, `downloaded part ${part.name}`)
     bytesSoFar += part.size
   }
 
   await concatenateParts(partPaths, archivePath)
+  verifyFileSize(archivePath, manifest.totalSize, 'assembled release archive')
 }
 
 // ── File operations ──────────────────────────────────────────────────
@@ -641,3 +957,5 @@ function extractTarGz(archive: string, destDir: string): Promise<void> {
     })
   })
 }
+
+

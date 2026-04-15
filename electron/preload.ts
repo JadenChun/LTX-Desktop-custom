@@ -24,6 +24,22 @@ api.onBackendHealthStatus = (cb: (data: BackendHealthStatus) => void) => {
   }
 }
 
+api.onMcpProjectChanged = (cb: (data: unknown) => void) => {
+  const listener = (_: unknown, data: unknown) => cb(data)
+  ipcRenderer.on('mcp-project-changed', listener)
+  return () => {
+    ipcRenderer.removeListener('mcp-project-changed', listener)
+  }
+}
+
+api.onExportProgress = (cb: (percent: number) => void) => {
+  ipcRenderer.on('export-progress', (_: unknown, percent: number) => cb(percent))
+}
+
+api.removeExportProgress = () => {
+  ipcRenderer.removeAllListeners('export-progress')
+}
+
 api.getPathForFile = (file: File) => webUtils.getPathForFile(file)
 
 api.platform = process.platform

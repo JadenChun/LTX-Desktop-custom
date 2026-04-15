@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, Folder, MoreVertical, Trash2, Pencil } from 'lucide-react'
+import { Plus, Folder, MoreVertical, Trash2, Pencil, Settings } from 'lucide-react'
 import { useProjects } from '../contexts/ProjectContext'
 import { LtxLogo } from '../components/LtxLogo'
 import { Button } from '../components/ui/button'
@@ -148,6 +148,10 @@ export function Home() {
     setRenamingId(null)
     setRenameValue('')
   }
+
+  const openSettings = () => {
+    window.dispatchEvent(new CustomEvent('open-settings'))
+  }
   
   return (
     <div className="h-screen bg-background flex">
@@ -182,7 +186,14 @@ export function Home() {
           )}
         </nav>
         
-        <div className="p-4 border-t border-zinc-800">
+        <div className="p-4 border-t border-zinc-800 space-y-2">
+          <button
+            onClick={openSettings}
+            className="w-full px-3 py-2 rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white text-left text-sm font-medium flex items-center gap-2 transition-colors"
+          >
+            <Settings className="h-4 w-4" />
+            Settings
+          </button>
           <button
             onClick={() => setIsCreating(true)}
             className="w-full px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium flex items-center justify-center gap-2 transition-colors"

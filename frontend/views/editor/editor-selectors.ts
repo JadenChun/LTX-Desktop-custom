@@ -56,6 +56,10 @@ export interface ExportClipData {
   trackIndex: number
   muted: boolean
   volume: number
+  transitionIn?: { type: string; duration: number }
+  transitionOut?: { type: string; duration: number }
+  audioFadeInDuration?: number
+  audioFadeOutDuration?: number
 }
 
 export interface ExportSubtitleData {
@@ -342,6 +346,11 @@ export function selectTotalDuration(state: EditorState): number {
     selectClips(state).reduce((max, clip) => Math.max(max, clip.startTime + clip.duration), 0),
     30,
   )
+}
+
+/** Actual content end time (no minimum padding). Used by playback engine to stop at last clip. */
+export function selectContentDuration(state: EditorState): number {
+  return selectClips(state).reduce((max, clip) => Math.max(max, clip.startTime + clip.duration), 0)
 }
 
 export function selectZoom(state: EditorState): number {
@@ -770,6 +779,10 @@ export function selectExportClipData(state: EditorState): ExportClipData[] {
       trackIndex: clip.trackIndex,
       muted: clip.muted || false,
       volume: clip.volume ?? 1,
+      transitionIn: clip.transitionIn,
+      transitionOut: clip.transitionOut,
+      audioFadeInDuration: clip.audioFadeInDuration ?? 0,
+      audioFadeOutDuration: clip.audioFadeOutDuration ?? 0,
     }))
 }
 

@@ -1,13 +1,69 @@
+export interface ColorCorrection {
+  brightness: number
+  contrast: number
+  saturation: number
+  temperature?: number
+  tint?: number
+  exposure?: number
+  highlights?: number
+  shadows?: number
+}
+
+export interface KenBurnsKeyframe {
+  scale: number
+  focusX: number // 0–100 (% of frame width), 50 = center
+  focusY: number // 0–100 (% of frame height), 50 = center
+}
+
+export interface KenBurnsMotion {
+  type: 'ken_burns'
+  start: KenBurnsKeyframe
+  end: KenBurnsKeyframe
+  easing?: 'linear' | 'easeInOut'
+}
+
+export type ClipMotion = KenBurnsMotion
+
 export interface ExportClip {
   path: string; type: string; startTime: number; duration: number; trimStart: number;
   speed: number; reversed: boolean; flipH: boolean; flipV: boolean; opacity: number; trackIndex: number;
   muted: boolean; volume: number;
+  transitionIn?: { type: string; duration: number };
+  transitionOut?: { type: string; duration: number };
+  audioFadeInDuration?: number;
+  audioFadeOutDuration?: number;
+  motion?: ClipMotion;
+  colorCorrection?: ColorCorrection;
 }
 
 export interface FlatSegment {
   filePath: string; type: string; startTime: number; duration: number; trimStart: number;
   speed: number; reversed: boolean; flipH: boolean; flipV: boolean; opacity: number;
   muted: boolean; volume: number;
+  motion?: ClipMotion;
+  colorCorrection?: ColorCorrection;
+}
+
+function clamp01(v: number): number {
+  return Math.max(0, Math.min(1, v))
+}
+
+function smoothstep(t: number): number {
+  return t * t * (3 - 2 * t)
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t
+}
+
+function sampleKenBurns(motion: KenBurnsMotion, tRaw: number): KenBurnsKeyframe {
+  const t0 = clamp01(tRaw)
+  const t = motion.easing === 'easeInOut' ? smoothstep(t0) : t0
+  return {
+    scale: lerp(motion.start.scale, motion.end.scale, t),
+    focusX: lerp(motion.start.focusX, motion.end.focusX, t),
+    focusY: lerp(motion.start.focusY, motion.end.focusY, t),
+  }
 }
 
 /**
@@ -26,7 +82,7 @@ export function flattenTimeline(clips: ExportClip[]): FlatSegment[] {
     boundaries.add(c.startTime)
     boundaries.add(c.startTime + c.duration)
   }
-  const sorted = [...boundaries].sort((a, b) => a - b)
+  const sorted = Array.from(boundaries).sort((a, b) => a - b)
 
   const segments: FlatSegment[] = []
 
@@ -45,6 +101,17 @@ export function flattenTimeline(clips: ExportClip[]): FlatSegment[] {
     if (active.length > 0) {
       const c = active[0]
       const offsetInClip = t0 - c.startTime
+      let segMotion: ClipMotion | undefined
+      if (c.motion && c.motion.type === 'ken_burns' && c.duration > 0) {
+        const tStart = offsetInClip / c.duration
+        const tEnd = (offsetInClip + segDur) / c.duration
+        segMotion = {
+          type: 'ken_burns',
+          start: sampleKenBurns(c.motion, tStart),
+          end: sampleKenBurns(c.motion, tEnd),
+          easing: c.motion.easing,
+        }
+      }
       segments.push({
         filePath: c.path,
         type: c.type,
@@ -58,6 +125,8 @@ export function flattenTimeline(clips: ExportClip[]): FlatSegment[] {
         opacity: c.opacity,
         muted: c.muted,
         volume: c.volume,
+        motion: segMotion,
+        colorCorrection: c.colorCorrection,
       })
     } else {
       segments.push({
@@ -76,6 +145,8 @@ export function flattenTimeline(clips: ExportClip[]): FlatSegment[] {
         prev.speed === seg.speed && prev.reversed === seg.reversed &&
         prev.flipH === seg.flipH && prev.flipV === seg.flipV &&
         prev.opacity === seg.opacity && prev.muted === seg.muted && prev.volume === seg.volume &&
+        JSON.stringify(prev.colorCorrection) === JSON.stringify(seg.colorCorrection) &&
+        !prev.motion && !seg.motion &&
         Math.abs((prev.trimStart + prev.duration * prev.speed) - seg.trimStart) < 0.01) {
       prev.duration += seg.duration
     } else {

@@ -357,6 +357,16 @@ export interface components {
             lockedSeed?: number | null;
             /** Ltxapikey */
             ltxApiKey?: string | null;
+            /** Mcpmodules */
+            mcpModules?: {
+                [key: string]: boolean;
+            } | null;
+            /** Mcptools */
+            mcpTools?: {
+                [key: string]: {
+                    [key: string]: boolean;
+                };
+            } | null;
             /** Modelsdir */
             modelsDir?: string | null;
             proModel?: components["schemas"]["ProModelSettingsPatch"] | null;
@@ -925,6 +935,16 @@ export interface components {
              * @default 42
              */
             lockedSeed: number;
+            /** Mcpmodules */
+            mcpModules?: {
+                [key: string]: boolean;
+            };
+            /** Mcptools */
+            mcpTools?: {
+                [key: string]: {
+                    [key: string]: boolean;
+                };
+            };
             /**
              * Modelsdir
              * @default

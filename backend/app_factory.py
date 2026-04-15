@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import hmac
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, Request
@@ -46,7 +47,11 @@ def create_app(
     """Create a configured FastAPI app bound to the provided handler."""
     init_state_service(handler)
 
-    app = FastAPI(title=title)
+    @contextlib.asynccontextmanager
+    async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        yield
+
+    app = FastAPI(title=title, lifespan=_lifespan)
     app.state.admin_token = admin_token  # type: ignore[attr-defined]
     app.add_middleware(
         CORSMiddleware,
@@ -67,8 +72,10 @@ def create_app(
         def _token_matches(candidate: str) -> bool:
             return hmac.compare_digest(candidate, auth_token)
 
-        # WebSocket: check query param
-        if request.headers.get("upgrade", "").lower() == "websocket":
+        # WebSocket / SSE: check query param (EventSource can't set headers)
+        if (
+            request.headers.get("upgrade", "").lower() == "websocket"
+        ):
             if _token_matches(request.query_params.get("token", "")):
                 return await call_next(request)
             return JSONResponse(status_code=401, content={"error": "Unauthorized"})

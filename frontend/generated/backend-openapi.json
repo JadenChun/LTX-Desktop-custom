@@ -69,6 +69,37 @@
             ],
             "title": "Ltxapikey"
           },
+          "mcpModules": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "boolean"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mcpmodules"
+          },
+          "mcpTools": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "type": "object"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mcptools"
+          },
           "modelsDir": {
             "anyOf": [
               {
@@ -1377,6 +1408,23 @@
             "default": 42,
             "title": "Lockedseed",
             "type": "integer"
+          },
+          "mcpModules": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "title": "Mcpmodules",
+            "type": "object"
+          },
+          "mcpTools": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "boolean"
+              },
+              "type": "object"
+            },
+            "title": "Mcptools",
+            "type": "object"
           },
           "modelsDir": {
             "default": "",

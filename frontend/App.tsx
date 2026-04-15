@@ -9,6 +9,7 @@ import { useBackend } from './hooks/use-backend'
 import { logger } from './lib/logger'
 import { Home } from './views/Home'
 import { Project } from './views/Project'
+import { AgentPreviewPage } from './views/AgentPreviewPage'
 import { LaunchGate } from './components/FirstRunSetup'
 import { PythonSetup } from './components/PythonSetup'
 import { SettingsModal, type SettingsTabId } from './components/SettingsModal'
@@ -173,8 +174,9 @@ function AppContent() {
   const isForcedFirstRun =
     setupState !== 'loading' && setupState.needsSetup && !setupState.needsLicense && forceApiGenerations
 
+  // API key is optional — complete first-run setup even without one.
   const shouldAutoFinalizeForcedFirstRun =
-    isForcedFirstRun && isLoaded && settings.hasLtxApiKey && !isFinalizingFirstRun && !firstRunFinalizeError
+    isForcedFirstRun && isLoaded && !isFinalizingFirstRun && !firstRunFinalizeError
 
   const areRequiredModelsDownloaded = useCallback(async () => {
     const payload = await ApiClient.getModelsStatus()
@@ -244,28 +246,14 @@ function AppContent() {
           <Loader2 className="h-4 w-4 animate-spin" />
           <span className="font-medium">Reconnecting...</span>
         </div>
-        <p className="mt-2 text-sm text-zinc-400">The backend process stopped unexpectedly. Attempting to restart...</p>
+        <p className="mt-2 text-sm text-zinc-400">The backend is restarting. Reconnecting to the app backend...</p>
       </div>
     </div>
   ) : null
 
-  const showGlobalControls = currentView !== 'home' && status.connected && setupState !== 'loading' && !setupState.needsSetup
-  const shouldBlockUntilSettingsLoaded = forceApiGenerations && !isLoaded
-  const shouldShowForcedFirstRunUpsell = isForcedFirstRun && isLoaded && !settings.hasLtxApiKey
-  const shouldShowGlobalForcedUpsell = forceApiGenerations && setupState !== 'loading' && !setupState.needsSetup && isLoaded && !settings.hasLtxApiKey
-  const shouldBlockForLtxKey = shouldShowForcedFirstRunUpsell || shouldShowGlobalForcedUpsell
-
-  useEffect(() => {
-    if (shouldBlockForLtxKey && apiGatewayRequest === null) {
-      setApiGatewayRequest({
-        requiredKeys: ['ltx'],
-        title: 'Connect API Keys',
-        description: 'This app is configured for API-only generation. Add your API key to continue.',
-        blocking: true,
-        includeOptionalMissing: true,
-      })
-    }
-  }, [shouldBlockForLtxKey, apiGatewayRequest])
+  const canOpenSettings = status.connected && setupState !== 'loading' && !setupState.needsSetup
+  const showGlobalControls = currentView !== 'home' && canOpenSettings
+  // LTX API key is optional — no upsell modal needed during first run.
 
   const shouldShowGateway = apiGatewayRequest !== null
 
@@ -460,6 +448,7 @@ function AppContent() {
           setSettingsInitialTab(undefined)
         }}
         initialTab={settingsInitialTab}
+        showProjectSettings={currentView !== 'home'}
       />
       <ApiGatewayModal
         isOpen={shouldShowGateway}
@@ -470,16 +459,7 @@ function AppContent() {
         sections={gatewaySections}
       />
 
-      {shouldBlockUntilSettingsLoaded && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 backdrop-blur-sm">
-          <div className="flex items-center gap-2 text-sm text-zinc-200">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Loading settings...
-          </div>
-        </div>
-      )}
-
-      {isForcedFirstRun && isLoaded && settings.hasLtxApiKey && isFinalizingFirstRun && (
+      {isForcedFirstRun && isLoaded && isFinalizingFirstRun && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm">
           <div className="flex items-center gap-2 text-sm text-zinc-200">
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -514,6 +494,13 @@ function AppContent() {
 }
 
 export default function App() {
+  if (typeof window !== 'undefined') {
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('agentPreview') === '1') {
+      return <AgentPreviewPage />
+    }
+  }
+
   return (
     <ProjectProvider>
       <KeyboardShortcutsProvider>

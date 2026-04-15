@@ -8,20 +8,22 @@ export type UpdateChannel = 'latest' | 'beta' | 'alpha'
 export function initAutoUpdater(
   channel: UpdateChannel = 'latest'
 ): void {
+  if (process.platform === 'win32') {
+    logger.info('[updater] Windows offline package detected, skipping auto-updater')
+    return
+  }
+
   if (channel !== 'latest') {
     autoUpdater.channel = channel
     autoUpdater.allowPrerelease = true
   }
 
-  // Windows/Linux: best-effort pre-download of python-embed so the new version
-  // doesn't have to download it on first launch. This doesn't block the update —
-  // autoInstallOnAppQuit stays true (the default) so the update installs whenever
-  // the user naturally quits, whether or not the pre-download has finished.
+  // Bundled-runtime builds don't need a separate python pre-download.
   autoUpdater.on('update-downloaded', async (info: UpdateDownloadedEvent) => {
     if (process.platform === 'darwin') return
 
     const newVersion = info.version
-    logger.info( `[updater] Update downloaded: v${newVersion}, pre-downloading python deps...`)
+    logger.info( `[updater] Update downloaded: v${newVersion}, bundled runtime requires no pre-download`)
 
     try {
       const didDownload = await preDownloadPythonForUpdate(newVersion, (progress) => {

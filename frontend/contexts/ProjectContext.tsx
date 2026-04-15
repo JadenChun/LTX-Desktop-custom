@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 import type { Project, Asset, AssetTake, ViewType, ProjectTab } from '../types/project'
 import { createDefaultTimeline } from '../types/project'
+import type { McpProjectChangeEvent } from '../../shared/electron-api-schema'
 import { logger } from '../lib/logger'
 
 interface ProjectContextType {
@@ -11,7 +12,7 @@ interface ProjectContextType {
   setCurrentProjectId: (id: string | null) => void
   currentTab: ProjectTab
   setCurrentTab: (tab: ProjectTab) => void
-  
+
   // Projects
   projects: Project[]
   currentProject: Project | null
@@ -19,7 +20,7 @@ interface ProjectContextType {
   createProject: (name: string) => Project
   deleteProject: (id: string) => void
   renameProject: (id: string, name: string) => void
-  
+
   // Assets
   addAsset: (projectId: string, asset: Omit<Asset, 'id' | 'createdAt'>) => Asset
   deleteAsset: (projectId: string, assetId: string) => void
@@ -28,11 +29,14 @@ interface ProjectContextType {
   deleteTakeFromAsset: (projectId: string, assetId: string, takeIndex: number) => void
   setAssetActiveTake: (projectId: string, assetId: string, takeIndex: number) => void
   toggleFavorite: (projectId: string, assetId: string) => void
-  
+
+  // Agent import
+  importMcpProject: (projectId: string, options?: ImportMcpProjectOptions) => Promise<Project>
+
   // Navigation helpers
   openProject: (id: string) => void
   goHome: () => void
-  
+
   // Cross-view communication (editor → gen space)
   genSpaceEditImagePath: string | null
   setGenSpaceEditImagePath: (path: string | null) => void
@@ -77,6 +81,11 @@ export interface PendingIcLoraUpdate {
   newTakeIndex: number
 }
 
+export interface ImportMcpProjectOptions {
+  overwrite?: boolean
+  createBackup?: boolean
+}
+
 const ProjectContext = createContext<ProjectContextType | null>(null)
 
 const STORAGE_KEY = 'ltx-projects'
@@ -93,6 +102,77 @@ function migrateProject(project: Project): Project {
   return project
 }
 
+function isRealPath(p: string): boolean {
+  return p.includes('/') || p.includes('\\') || /^[A-Za-z]:/.test(p)
+}
+
+function shouldApprovePath(p?: string | null): p is string {
+  if (!p) return false
+  const lower = p.toLowerCase()
+  if (lower.startsWith('blob:') || lower.startsWith('data:')) return false
+  if (lower.startsWith('file://')) return true
+  return isRealPath(p)
+}
+
+function collectProjectFileAccessPaths(project: Project): string[] {
+  const paths = new Set<string>()
+  const add = (p?: string | null) => {
+    if (shouldApprovePath(p)) paths.add(p)
+  }
+
+  for (const asset of project.assets) {
+    add(asset.path)
+    asset.takes?.forEach(take => {
+      add(take.path)
+    })
+  }
+
+  project.timelines?.forEach(timeline => {
+    timeline.clips?.forEach(clip => {
+      if (clip.asset) {
+        add(clip.asset.path)
+        clip.asset.takes?.forEach(take => {
+          add(take.path)
+        })
+      }
+    })
+  })
+
+  return Array.from(paths)
+}
+
+// Recover broken blob URLs — no-op in current schema (url fields removed), kept for future-proofing
+function recoverAssetUrls(project: Project): Project {
+  return project
+}
+
+// Repair corrupted trackIndex values (e.g. from subtitle track deletion bug)
+function repairTrackIndices(project: Project): Project {
+  let changed = false
+  const fixedTimelines = project.timelines?.map(tl => {
+    const trackCount = tl.tracks?.length || 0
+    if (trackCount === 0) return tl
+    const fixedClips = tl.clips?.map(clip => {
+      if (clip.trackIndex >= trackCount || clip.trackIndex < 0) {
+        changed = true
+        return { ...clip, trackIndex: Math.max(0, Math.min(trackCount - 1, clip.trackIndex)) }
+      }
+      return clip
+    })
+    const fixedSubtitles = tl.subtitles?.map(sub => {
+      if (sub.trackIndex >= trackCount || sub.trackIndex < 0) {
+        changed = true
+        return { ...sub, trackIndex: Math.max(0, Math.min(trackCount - 1, sub.trackIndex)) }
+      }
+      return sub
+    })
+    if (!changed) return tl
+    return { ...tl, clips: fixedClips || tl.clips, subtitles: fixedSubtitles || tl.subtitles }
+  })
+  if (!changed) return project
+  return { ...project, timelines: fixedTimelines || project.timelines }
+}
+
 // Load initial projects from localStorage synchronously
 function loadProjectsFromStorage(): Project[] {
   try {
@@ -100,7 +180,8 @@ function loadProjectsFromStorage(): Project[] {
     if (stored) {
       const parsed = JSON.parse(stored)
       if (Array.isArray(parsed)) {
-        return parsed.map(migrateProject)
+        // Migrate any old projects, then recover broken blob URLs, then repair track indices
+        return parsed.map(migrateProject).map(recoverAssetUrls).map(repairTrackIndices)
       }
     }
   } catch (e) {
@@ -112,7 +193,7 @@ function loadProjectsFromStorage(): Project[] {
 export function ProjectProvider({ children }: { children: React.ReactNode }) {
   const [currentView, setCurrentView] = useState<ViewType>('home')
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null)
-  const [currentTab, setCurrentTab] = useState<ProjectTab>('gen-space')
+  const [currentTab, setCurrentTab] = useState<ProjectTab>('video-editor')
   const [genSpaceEditImagePath, setGenSpaceEditImagePath] = useState<string | null>(null)
   const [genSpaceEditMode, setGenSpaceEditMode] = useState<'image' | 'video' | null>(null)
   const [genSpaceAudioPath, setGenSpaceAudioPath] = useState<string | null>(null)
@@ -123,17 +204,233 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
   // Initialize with data from localStorage
   const [projects, setProjects] = useState<Project[]>(() => loadProjectsFromStorage())
   const isInitializedRef = useRef(false)
-  
+  const backupMergeInFlightRef = useRef(false)
+  const backupMergeLastAttemptRef = useRef(0)
+  const mcpSaveTimersRef = useRef<Map<string, number>>(new Map())
+  const mcpSavePendingRef = useRef<Map<string, Project>>(new Map())
+  const mcpSaveInFlightRef = useRef<Set<string>>(new Set())
+  const mcpAcknowledgedWritesRef = useRef<Map<string, number>>(new Map())
+  const lastApprovedPathsSignatureRef = useRef<string>('')
+
   // Mark as initialized after first render
   useEffect(() => {
     isInitializedRef.current = true
   }, [])
-  
+
+  const loadMcpProject = useCallback(async (projectId: string): Promise<Project> => {
+    const projectData = await window.electronAPI.getMcpProject({ projectId }) as unknown as Project
+    const imported = recoverAssetUrls(migrateProject(projectData))
+    imported.mcpLastUpdatedAt = imported.updatedAt
+    return imported
+  }, [])
+
+  const handleExternalDelete = useCallback((projectId: string) => {
+    mcpAcknowledgedWritesRef.current.delete(projectId)
+
+    setProjects(prev => {
+      const existing = prev.find(project => project.id === projectId)
+      if (!existing) return prev
+
+      const next = prev.filter(project => project.id !== projectId)
+      const lastSeen = existing.mcpLastUpdatedAt ?? 0
+      if (existing.mcpLastUpdatedAt !== undefined && existing.updatedAt > lastSeen) {
+        const now = Date.now()
+        next.unshift({
+          ...existing,
+          id: `project-${now}-${Math.random().toString(36).substr(2, 9)}`,
+          name: `${existing.name} (Local backup)`,
+          createdAt: now,
+          updatedAt: now,
+          mcpLastUpdatedAt: undefined,
+          backupOfProjectId: existing.id,
+        })
+      }
+      return next
+    })
+
+    if (currentProjectId === projectId) {
+      setCurrentProjectId(null)
+      setCurrentView('home')
+    }
+  }, [currentProjectId])
+
+  // Sync a single MCP project by ID (fetch full state from shared store)
+  const syncSingleProject = useCallback(async (projectId: string) => {
+    try {
+      const imported = await loadMcpProject(projectId)
+
+      setProjects(prev => {
+        const existing = prev.find(p => p.id === projectId)
+        if (!existing) {
+          // New project from MCP
+          return [imported, ...prev]
+        }
+        // Check if local edits happened since last sync
+        const lastSeen = existing.mcpLastUpdatedAt ?? 0
+        if (imported.updatedAt <= lastSeen) return prev
+
+        const backups: Project[] = []
+        if (existing.updatedAt > lastSeen) {
+          const now = Date.now()
+          backups.push({
+            ...existing,
+            id: `project-${now}-${Math.random().toString(36).substr(2, 9)}`,
+            name: `${existing.name} (Local backup)`,
+            createdAt: now,
+            updatedAt: now,
+            mcpLastUpdatedAt: undefined,
+            backupOfProjectId: existing.id,
+          })
+        }
+        const replaced = prev.map(p => p.id === projectId ? imported : p)
+        return backups.length ? [...backups, ...replaced] : replaced
+      })
+    } catch (e) {
+      logger.info(`MCP sync for ${projectId} failed: ${e}`)
+    }
+  }, [loadMcpProject])
+
+  // Full sync: fetch all MCP project summaries and sync any that are newer
+  const syncAllMcpProjects = useCallback(async () => {
+    try {
+      const summaries = await window.electronAPI.listMcpProjects()
+      const summaryIds = new Set(summaries.map(summary => summary.id))
+
+      const stored = localStorage.getItem(STORAGE_KEY)
+      const existing = stored ? (JSON.parse(stored) as Project[]) : []
+      const existingById = new Map(existing.map(p => [p.id, p]))
+
+      for (const localProject of existing) {
+        if (localProject.mcpLastUpdatedAt === undefined) continue
+        if (summaryIds.has(localProject.id)) continue
+        handleExternalDelete(localProject.id)
+      }
+
+      for (const summary of summaries) {
+        if (!summary?.id) continue
+        const local = existingById.get(summary.id)
+        const mcpUpdatedAt = typeof summary.updatedAt === 'number' ? summary.updatedAt : 0
+        const lastSeen = local?.mcpLastUpdatedAt ?? 0
+        if (local && mcpUpdatedAt <= lastSeen) continue
+        await syncSingleProject(summary.id)
+      }
+    } catch (e) {
+      logger.info(`MCP auto-sync skipped: ${e}`)
+    }
+  }, [handleExternalDelete, syncSingleProject])
+
+  // Electron watcher-driven MCP sync
+  useEffect(() => {
+    void syncAllMcpProjects()
+
+    const unsubscribe = window.electronAPI.onMcpProjectChanged((event: McpProjectChangeEvent) => {
+      if (event.kind === 'updated') {
+        const acknowledged = mcpAcknowledgedWritesRef.current.get(event.projectId)
+        if (acknowledged !== undefined && event.updatedAt <= acknowledged) {
+          if (event.updatedAt === acknowledged) {
+            mcpAcknowledgedWritesRef.current.delete(event.projectId)
+          }
+          return
+        }
+        void syncSingleProject(event.projectId)
+        return
+      }
+      handleExternalDelete(event.projectId)
+    })
+
+    const onFocus = () => { void syncAllMcpProjects() }
+    window.addEventListener('focus', onFocus)
+
+    return () => {
+      unsubscribe()
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [handleExternalDelete, syncAllMcpProjects, syncSingleProject])
+
+  // If MCP sync created a local backup, automatically merge it back into the MCP store (one-time recovery).
+  useEffect(() => {
+    const now = Date.now()
+    if (backupMergeInFlightRef.current) return
+    if (now - backupMergeLastAttemptRef.current < 1500) return
+
+    const backups = projects.filter(p => p.name.endsWith(' (Local backup)'))
+    if (backups.length === 0) return
+
+    const mcpProjects = projects.filter(p => p.mcpLastUpdatedAt !== undefined)
+    if (mcpProjects.length === 0) return
+
+    // For each base project, pick the newest backup and overwrite the MCP store with it.
+    const candidates: Array<{ backup: Project; target: Project }> = []
+    const byTargetId = new Map<string, Project>()
+
+    for (const b of backups) {
+      const targetId = b.backupOfProjectId
+      const target = targetId ? mcpProjects.find(p => p.id === targetId) : (() => {
+        const baseName = b.name.replace(/ \(Local backup\)$/, '')
+        return mcpProjects.find(p => p.name === baseName)
+      })()
+      if (!target) continue
+      if (b.updatedAt <= (target.mcpLastUpdatedAt ?? 0)) continue
+
+      const existing = byTargetId.get(target.id)
+      if (!existing || (b.updatedAt > existing.updatedAt)) {
+        byTargetId.set(target.id, b)
+      }
+    }
+
+    for (const [targetId, backup] of byTargetId.entries()) {
+      const target = mcpProjects.find(p => p.id === targetId)
+      if (target) candidates.push({ backup, target })
+    }
+
+    if (candidates.length === 0) return
+
+    backupMergeInFlightRef.current = true
+    backupMergeLastAttemptRef.current = now
+
+    void (async () => {
+      for (const { backup, target } of candidates) {
+        try {
+          const payload: any = {
+            ...backup,
+            id: target.id,
+            name: target.name,
+            createdAt: target.createdAt,
+          }
+          delete payload.mcpLastUpdatedAt
+          delete payload.backupOfProjectId
+
+          const resp = await window.electronAPI.putMcpProject({
+            projectId: target.id,
+            project: payload as unknown as Record<string, unknown>,
+          })
+          if (resp.status !== 'ok' || !resp.project) throw new Error(`status=${resp.status}`)
+          const saved = resp.project as unknown as Project
+          const serverUpdatedAt = saved.updatedAt
+          mcpAcknowledgedWritesRef.current.set(target.id, serverUpdatedAt)
+
+          setProjects(prev => {
+            const next = prev
+              .filter(p => p.id !== backup.id)
+              .map(p => p.id === target.id ? { ...saved, mcpLastUpdatedAt: serverUpdatedAt } : p)
+            return next
+          })
+
+          logger.info(`Merged local backup into MCP project: ${target.id}`)
+        } catch (e) {
+          logger.info(`Backup merge failed for ${target.id}: ${e}`)
+        }
+      }
+    })().finally(() => {
+      backupMergeInFlightRef.current = false
+    })
+  }, [projects])
+
   // Save projects to localStorage when changed (but not on initial load)
   useEffect(() => {
     // Skip saving on initial render to avoid overwriting with stale data
     if (!isInitializedRef.current) return
-    
+
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(projects))
       logger.info(`Projects saved: ${projects.length}`)
@@ -141,15 +438,120 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
       logger.error(`Failed to save projects: ${e}`)
     }
   }, [projects])
-  
+
+  const queueMcpSave = useCallback((projectId: string) => {
+    const existingTimer = mcpSaveTimersRef.current.get(projectId)
+    if (existingTimer) window.clearTimeout(existingTimer)
+
+    const handle = window.setTimeout(async () => {
+      mcpSaveTimersRef.current.delete(projectId)
+      const pending = mcpSavePendingRef.current.get(projectId)
+      if (!pending || pending.mcpLastUpdatedAt === undefined) return
+      if (mcpSaveInFlightRef.current.has(projectId)) {
+        queueMcpSave(projectId)
+        return
+      }
+
+      const lastSeen = pending.mcpLastUpdatedAt ?? 0
+      if (pending.updatedAt <= lastSeen) {
+        mcpSavePendingRef.current.delete(projectId)
+        return
+      }
+
+      mcpSaveInFlightRef.current.add(projectId)
+      try {
+        const resp = await window.electronAPI.putMcpProject({
+          projectId,
+          project: pending as unknown as Record<string, unknown>,
+          ifMatch: lastSeen > 0 ? lastSeen : undefined,
+        })
+        if (resp.status === 'conflict' && resp.project) {
+          // Server has newer version — fetch it and merge
+          const imported = recoverAssetUrls(migrateProject(resp.project as unknown as Project))
+          imported.mcpLastUpdatedAt = imported.updatedAt
+          setProjects(prev => prev.map(p => p.id === projectId ? imported : p))
+          mcpSavePendingRef.current.delete(projectId)
+          return
+        }
+        if (resp.status === 'not_found') {
+          mcpSavePendingRef.current.delete(projectId)
+          handleExternalDelete(projectId)
+          return
+        }
+        if (resp.status !== 'ok' || !resp.project) throw new Error(`status=${resp.status}`)
+        const saved = resp.project as unknown as Project
+        const imported = recoverAssetUrls(migrateProject(saved))
+        const serverUpdatedAt = imported.updatedAt
+        mcpAcknowledgedWritesRef.current.set(projectId, serverUpdatedAt)
+
+        setProjects(prev => prev.map(p => (
+          p.id === projectId
+            ? { ...imported, mcpLastUpdatedAt: serverUpdatedAt }
+            : p
+        )))
+
+        // If no newer local edits happened during the request, clear pending.
+        const stillPending = mcpSavePendingRef.current.get(projectId)
+        if (stillPending && stillPending.updatedAt <= (serverUpdatedAt ?? stillPending.updatedAt)) {
+          mcpSavePendingRef.current.delete(projectId)
+        }
+      } catch (e) {
+        logger.info(`MCP save failed for ${projectId}: ${e}`)
+      } finally {
+        mcpSaveInFlightRef.current.delete(projectId)
+        if (mcpSavePendingRef.current.has(projectId)) queueMcpSave(projectId)
+      }
+    }, 300)
+
+    mcpSaveTimersRef.current.set(projectId, handle)
+  }, [])
+
+  useEffect(() => {
+    for (const project of projects) {
+      if (project.mcpLastUpdatedAt === undefined) continue
+      if (project.updatedAt <= project.mcpLastUpdatedAt) continue
+
+      const pending = mcpSavePendingRef.current.get(project.id)
+      if (pending && pending.updatedAt >= project.updatedAt) continue
+
+      mcpSavePendingRef.current.set(project.id, project)
+      queueMcpSave(project.id)
+    }
+  }, [projects, queueMcpSave])
+
+  useEffect(() => {
+    return () => {
+      for (const handle of mcpSaveTimersRef.current.values()) {
+        window.clearTimeout(handle)
+      }
+      mcpSaveTimersRef.current.clear()
+    }
+  }, [])
+
   const currentProject = projects.find(p => p.id === currentProjectId) || null
+
+  // Keep Electron path approvals in sync with all file-backed project media.
+  useEffect(() => {
+    if (!currentProject || !window.electronAPI?.approvePaths) return
+    const paths = collectProjectFileAccessPaths(currentProject)
+    if (paths.length === 0) return
+
+    const sortedPaths = [...paths].sort()
+    const signature = sortedPaths.join('\n')
+    if (signature === lastApprovedPathsSignatureRef.current) return
+    lastApprovedPathsSignatureRef.current = signature
+
+    window.electronAPI.approvePaths({ filePaths: sortedPaths }).catch((e) => {
+      logger.info(`Failed to approve project paths: ${e}`)
+    })
+  }, [currentProject?.id, currentProject?.updatedAt])
 
   const setCurrentProject = useCallback((project: Project) => {
     setProjects(prev => prev.map(existing => (
       existing.id === project.id ? project : existing
     )))
   }, [])
-  
+
   const createProject = useCallback((name: string): Project => {
     const defaultTimeline = createDefaultTimeline('Timeline 1')
     const newProject: Project = {
@@ -160,21 +562,34 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
       assets: [],
       timelines: [defaultTimeline],
       activeTimelineId: defaultTimeline.id,
+      mcpLastUpdatedAt: 0,
     }
     setProjects(prev => [newProject, ...prev])
     return newProject
   }, [])
-  
+
   const deleteProject = useCallback((id: string) => {
+    const existingTimer = mcpSaveTimersRef.current.get(id)
+    if (existingTimer) {
+      window.clearTimeout(existingTimer)
+      mcpSaveTimersRef.current.delete(id)
+    }
+    mcpSavePendingRef.current.delete(id)
+    mcpSaveInFlightRef.current.delete(id)
+    mcpAcknowledgedWritesRef.current.delete(id)
+
+    void window.electronAPI.deleteMcpProject({ projectId: id })
+      .catch((e: unknown) => logger.info(`Failed to delete project in MCP store: ${e}`))
+
     setProjects(prev => prev.filter(p => p.id !== id))
     if (currentProjectId === id) {
       setCurrentProjectId(null)
       setCurrentView('home')
     }
   }, [currentProjectId])
-  
+
   const renameProject = useCallback((id: string, name: string) => {
-    setProjects(prev => prev.map(p => 
+    setProjects(prev => prev.map(p =>
       p.id === id ? { ...p, name, updatedAt: Date.now() } : p
     ))
   }, [])
@@ -185,26 +600,26 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
       id: `asset-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       createdAt: Date.now(),
     }
-    setProjects(prev => prev.map(p => 
-      p.id === projectId 
-        ? { 
-            ...p, 
+    setProjects(prev => prev.map(p =>
+      p.id === projectId
+        ? {
+            ...p,
             assets: [newAsset, ...p.assets],
             updatedAt: Date.now(),
-          } 
+          }
         : p
     ))
     return newAsset
   }, [])
-  
+
   const deleteAsset = useCallback((projectId: string, assetId: string) => {
-    setProjects(prev => prev.map(p => 
-      p.id === projectId 
-        ? { ...p, assets: p.assets.filter(a => a.id !== assetId), updatedAt: Date.now() } 
+    setProjects(prev => prev.map(p =>
+      p.id === projectId
+        ? { ...p, assets: p.assets.filter(a => a.id !== assetId), updatedAt: Date.now() }
         : p
     ))
   }, [])
-  
+
   const updateAsset = useCallback((projectId: string, assetId: string, updates: Partial<Asset>) => {
     setProjects(prev => prev.map(p =>
       p.id === projectId
@@ -307,30 +722,64 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const toggleFavorite = useCallback((projectId: string, assetId: string) => {
-    setProjects(prev => prev.map(p => 
-      p.id === projectId 
-        ? { 
-            ...p, 
-            assets: p.assets.map(a => 
+    setProjects(prev => prev.map(p =>
+      p.id === projectId
+        ? {
+            ...p,
+            assets: p.assets.map(a =>
               a.id === assetId ? { ...a, favorite: !a.favorite } : a
             ),
             updatedAt: Date.now(),
-          } 
+          }
         : p
     ))
   }, [])
-  
+
+  const importMcpProject = useCallback(async (projectId: string, options?: ImportMcpProjectOptions): Promise<Project> => {
+    const overwrite = options?.overwrite ?? true
+    const createBackup = options?.createBackup ?? true
+
+    const imported = await loadMcpProject(projectId)
+    setProjects(prev => {
+      const existingIndex = prev.findIndex(p => p.id === imported.id)
+      if (existingIndex === -1) return [imported, ...prev]
+      if (!overwrite) return prev
+
+      const next = [...prev]
+
+      if (createBackup) {
+        const existing = next[existingIndex]
+        const backupId = `project-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+        const backup: Project = {
+          ...existing,
+          id: backupId,
+          name: `${existing.name} (Backup)`,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        }
+        next.unshift(backup)
+      }
+
+      const replacedIndex = next.findIndex(p => p.id === imported.id)
+      if (replacedIndex === -1) next.unshift(imported)
+      else next[replacedIndex] = imported
+
+      return next
+    })
+    return imported
+  }, [loadMcpProject])
+
   const openProject = useCallback((id: string) => {
     setCurrentProjectId(id)
     setCurrentView('project')
-    setCurrentTab('gen-space')
+    setCurrentTab('video-editor')
   }, [])
-  
+
   const goHome = useCallback(() => {
     setCurrentView('home')
     setCurrentProjectId(null)
   }, [])
-  
+
   return (
     <ProjectContext.Provider value={{
       currentView,
@@ -352,6 +801,7 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
       deleteTakeFromAsset,
       setAssetActiveTake,
       toggleFavorite,
+      importMcpProject,
       openProject,
       goHome,
       genSpaceEditImagePath,

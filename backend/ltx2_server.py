@@ -25,9 +25,7 @@ import threading
 
 import torch
 
-import services.patches.record_stream_fix as _record_stream_fix  # pyright: ignore[reportUnusedImport]  # Remove once ltx-core includes the fix
-del _record_stream_fix
-
+from app_data_dir import resolve_app_data_dir
 from state.app_settings import AppSettings
 
 # ============================================================
@@ -45,6 +43,19 @@ console_handler.setLevel(logging.INFO)
 
 logging.basicConfig(level=logging.INFO, handlers=[console_handler])
 logger = logging.getLogger(__name__)
+
+try:
+    import services.patches.record_stream_fix as _record_stream_fix  # pyright: ignore[reportUnusedImport]  # Remove once ltx-core includes the fix
+except ModuleNotFoundError as exc:
+    if exc.name == "ltx_core.layer_streaming":
+        logger.warning(
+            "Skipping record_stream_fix patch because %s is unavailable in the installed ltx-core package",
+            exc.name,
+        )
+    else:
+        raise
+else:
+    del _record_stream_fix
 
 # ============================================================
 # SageAttention Integration
@@ -103,7 +114,7 @@ if use_sage_attention:
 # Constants & Paths
 # ============================================================
 
-PORT = 0
+PORT = 8765
 
 
 def _get_device() -> torch.device:
@@ -117,19 +128,7 @@ def _get_device() -> torch.device:
 DEVICE = _get_device()
 DTYPE = torch.bfloat16
 
-def _resolve_app_data_dir() -> Path:
-    env_path = os.environ.get("LTX_APP_DATA_DIR")
-    if not env_path:
-        raise RuntimeError(
-            "LTX_APP_DATA_DIR environment variable must be set. "
-            "When running standalone, set it to the desired data directory."
-        )
-    candidate = Path(env_path)
-    candidate.mkdir(parents=True, exist_ok=True)
-    return candidate
-
-
-APP_DATA_DIR = _resolve_app_data_dir()
+APP_DATA_DIR = resolve_app_data_dir()
 
 DEFAULT_MODELS_DIR = APP_DATA_DIR / "models"
 DEFAULT_MODELS_DIR.mkdir(parents=True, exist_ok=True)
@@ -265,7 +264,7 @@ if __name__ == "__main__":
     import asyncio
     import uvicorn
 
-    port = int(os.environ.get("LTX_PORT", "") or PORT)
+    port = 8765  # Fixed port
     logger.info("=" * 60)
     logger.info("LTX-2 Video Generation Server (FastAPI + Uvicorn)")
     log_hardware_info()
@@ -274,8 +273,6 @@ if __name__ == "__main__":
     warmup_thread = threading.Thread(target=background_warmup, daemon=True)
     warmup_thread.start()
 
-    # Use our root logging config so uvicorn logs go to stdout (not its
-    # default stderr), letting Electron tag them correctly as INFO.
     log_config: dict[str, object] = {
         "version": 1,
         "disable_existing_loggers": False,
@@ -294,7 +291,6 @@ if __name__ == "__main__":
 
     import socket as _socket
 
-    # Bind the socket ourselves so we know the actual port before uvicorn starts.
     sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
     sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
     sock.bind(("127.0.0.1", port))
@@ -308,8 +304,12 @@ if __name__ == "__main__":
     async def _startup_with_ready_msg(sockets: list[_socket.socket] | None = None) -> None:
         await _orig_startup(sockets=sockets)
         if server.started:
-            # Machine-parseable ready message — Electron matches this line
             print(f"Server running on http://127.0.0.1:{actual_port}", flush=True)
+            print("", flush=True)
+            print("=" * 60, flush=True)
+            print("  Backend ready", flush=True)
+            print("=" * 60, flush=True)
+            print("", flush=True)
 
     server.startup = _startup_with_ready_msg  # type: ignore[assignment]
 

@@ -1,6 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { resetBackendCredentials } from '../lib/backend'
 import { ApiClient } from '../lib/api-client'
+import {
+  createDefaultMcpModules,
+  createDefaultMcpTools,
+  type McpModuleId,
+} from '../lib/mcp-tool-manifest'
 
 export interface InferenceSettings {
   steps: number
@@ -14,6 +19,8 @@ export interface FastModelSettings {
 export interface AppSettings {
   useTorchCompile: boolean
   loadOnStartup: boolean
+  mcpModules: Record<McpModuleId, boolean>
+  mcpTools: Record<McpModuleId, Record<string, boolean>>
   hasLtxApiKey: boolean
   userPrefersLtxApiVideoGenerations: boolean
   hasFalApiKey: boolean
@@ -32,6 +39,8 @@ export interface AppSettings {
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   useTorchCompile: false,
   loadOnStartup: true,
+  mcpModules: createDefaultMcpModules(),
+  mcpTools: createDefaultMcpTools(),
   hasLtxApiKey: false,
   userPrefersLtxApiVideoGenerations: false,
   hasFalApiKey: false,
@@ -64,6 +73,11 @@ interface AppSettingsContextValue {
 
 const AppSettingsContext = createContext<AppSettingsContextValue | null>(null)
 
+type AppSettingsPayload = Partial<Omit<AppSettings, 'mcpModules' | 'mcpTools'>> & {
+  mcpModules?: Record<string, boolean>
+  mcpTools?: Record<string, Record<string, boolean>>
+}
+
 function toBackendProcessStatus(value: unknown): BackendProcessStatus | null {
   if (!value || typeof value !== 'object') {
     return null
@@ -76,10 +90,29 @@ function toBackendProcessStatus(value: unknown): BackendProcessStatus | null {
   return null
 }
 
-function normalizeAppSettings(data: Partial<AppSettings>): AppSettings {
+function normalizeAppSettings(data: AppSettingsPayload): AppSettings {
+  const defaultMcpModules = createDefaultMcpModules()
+  const defaultMcpTools = createDefaultMcpTools()
+
   return {
     useTorchCompile: data.useTorchCompile ?? DEFAULT_APP_SETTINGS.useTorchCompile,
     loadOnStartup: data.loadOnStartup ?? DEFAULT_APP_SETTINGS.loadOnStartup,
+    mcpModules: {
+      ...defaultMcpModules,
+      ...(data.mcpModules ?? {}),
+    },
+    mcpTools: {
+      ...defaultMcpTools,
+      ...Object.fromEntries(
+        Object.entries(data.mcpTools ?? {}).map(([moduleId, toolFlags]) => [
+          moduleId,
+          {
+            ...defaultMcpTools[moduleId as McpModuleId],
+            ...toolFlags,
+          },
+        ]),
+      ),
+    },
     hasLtxApiKey: data.hasLtxApiKey ?? DEFAULT_APP_SETTINGS.hasLtxApiKey,
     userPrefersLtxApiVideoGenerations: data.userPrefersLtxApiVideoGenerations ?? DEFAULT_APP_SETTINGS.userPrefersLtxApiVideoGenerations,
     hasFalApiKey: data.hasFalApiKey ?? DEFAULT_APP_SETTINGS.hasFalApiKey,
@@ -100,7 +133,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS)
   const [isLoaded, setIsLoaded] = useState(false)
   const [runtimePolicyLoaded, setRuntimePolicyLoaded] = useState(false)
-  const [forceApiGenerations, setForceApiGenerations] = useState(true)
+  const [forceApiGenerations, setForceApiGenerations] = useState(false)
   const [backendProcessStatus, setBackendProcessStatus] = useState<BackendProcessStatus | null>(null)
 
   useEffect(() => {
@@ -121,8 +154,8 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
         }
       } catch {
         if (!cancelled) {
-          // Fail closed until policy can be read.
-          setForceApiGenerations(true)
+          // Fail open — treat as no forced API if policy cannot be read.
+          setForceApiGenerations(false)
         }
       } finally {
         if (!cancelled) {

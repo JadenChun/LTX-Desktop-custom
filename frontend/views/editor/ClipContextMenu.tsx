@@ -298,6 +298,26 @@ function SingleClipMenu({
   const isVideo = contextClip.type === 'video'
   const isImage = contextClip.type === 'image'
   const hasAI = liveAsset && !isAdjustment
+  const presetSpeeds = [0.25, 0.5, 1, 1.5, 2, 4]
+  const [customSpeedInput, setCustomSpeedInput] = React.useState(`${contextClip.speed}`)
+
+  const applySpeedToClip = (requestedSpeed: number, closeAfter = true) => {
+    if (!Number.isFinite(requestedSpeed) || requestedSpeed < 0.25) return
+    const speed = Math.min(requestedSpeed, 100)
+    const oldSpeed = contextClip.speed
+    let newDuration = contextClip.duration * (oldSpeed / speed)
+    const maxDur = getMaxClipDuration({ ...contextClip, speed })
+    newDuration = Math.min(newDuration, maxDur)
+    newDuration = Math.max(0.5, newDuration)
+    updateClip(contextClip.id, { speed, duration: newDuration })
+    if (closeAfter) close()
+  }
+
+  const applyCustomSpeed = (closeAfter = true) => {
+    const parsed = parseFloat(customSpeedInput)
+    if (Number.isNaN(parsed) || parsed < 0.25) return
+    applySpeedToClip(parsed, closeAfter)
+  }
 
   return (
     <>
@@ -317,17 +337,11 @@ function SingleClipMenu({
       {/* ── 3. Properties ── */}
       <SectionLabel>Speed</SectionLabel>
       <div className="flex items-center gap-1 px-3 py-1">
-        {[0.25, 0.5, 1, 1.5, 2, 4].map(speed => (
+        {presetSpeeds.map(speed => (
           <button
             key={speed}
             onClick={() => {
-              const oldSpeed = contextClip.speed
-              let newDuration = contextClip.duration * (oldSpeed / speed)
-              const maxDur = getMaxClipDuration({ ...contextClip, speed })
-              newDuration = Math.min(newDuration, maxDur)
-              newDuration = Math.max(0.5, newDuration)
-              updateClip(contextClip.id, { speed, duration: newDuration })
-              close()
+              applySpeedToClip(speed, true)
             }}
             className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
               contextClip.speed === speed
@@ -338,6 +352,30 @@ function SingleClipMenu({
             {speed}x
           </button>
         ))}
+      </div>
+      <div className="px-3 pb-1.5 flex items-center gap-1.5">
+        <input
+          type="number"
+          min={0.25}
+          max={100}
+          step={0.25}
+          value={customSpeedInput}
+          placeholder="Custom"
+          onChange={(e) => setCustomSpeedInput(e.target.value)}
+          onKeyDown={(e) => {
+            e.stopPropagation()
+            if (e.key === 'Enter') applyCustomSpeed(true)
+          }}
+          className="w-16 bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-[10px] text-white text-right [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+          title="Custom speed"
+        />
+        <span className="text-[10px] text-zinc-500">x</span>
+        <button
+          onClick={() => applyCustomSpeed(true)}
+          className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-zinc-700 text-zinc-300 hover:bg-zinc-600 hover:text-white transition-colors"
+        >
+          Apply
+        </button>
       </div>
       <MenuItem icon={RotateCcw} label="Reverse"
         badge={contextClip.reversed ? 'ON' : undefined} badgeClass="text-blue-400"
@@ -594,6 +632,37 @@ function MultiClipMenu({
   const allReversed = selectedClips.every(c => c.reversed)
   const allFlipH = selectedClips.every(c => c.flipH)
   const allFlipV = selectedClips.every(c => c.flipV)
+  const presetSpeeds = [0.25, 0.5, 1, 1.5, 2, 4]
+  const sharedSpeed = selectedClips.length > 0 && selectedClips.every(c => c.speed === selectedClips[0].speed)
+    ? selectedClips[0].speed
+    : null
+  const [customSpeedInput, setCustomSpeedInput] = React.useState(sharedSpeed !== null ? `${sharedSpeed}` : '')
+
+  React.useEffect(() => {
+    setCustomSpeedInput(sharedSpeed !== null ? `${sharedSpeed}` : '')
+  }, [sharedSpeed, n])
+
+  const applySpeedToSelectedClips = (requestedSpeed: number, closeAfter = true) => {
+    if (!Number.isFinite(requestedSpeed) || requestedSpeed < 0.25) return
+    const speed = Math.min(requestedSpeed, 100)
+    setClips(prev => prev.map(c => {
+      if (!selectedClipIds.has(c.id)) return c
+      const oldSpeed = c.speed
+      let newDuration = c.duration * (oldSpeed / speed)
+      const maxDur = getMaxClipDuration({ ...c, speed })
+      newDuration = Math.min(newDuration, maxDur)
+      newDuration = Math.max(0.5, newDuration)
+      return { ...c, speed, duration: newDuration }
+    }))
+    if (closeAfter) close()
+  }
+
+  const applyCustomSpeed = (closeAfter = true) => {
+    const parsed = parseFloat(customSpeedInput)
+    if (Number.isNaN(parsed) || parsed < 0.25) return
+    applySpeedToSelectedClips(parsed, closeAfter)
+  }
+
   const batchUpdate = (updates: Partial<TimelineClip>) => {
     setClips(prev => prev.map(c => selectedClipIds.has(c.id) ? { ...c, ...updates } : c))
     close()
@@ -621,26 +690,41 @@ function MultiClipMenu({
       {/* ── 2. Properties ── */}
       <SectionLabel>Speed</SectionLabel>
       <div className="flex items-center gap-1 px-3 py-1">
-        {[0.25, 0.5, 1, 1.5, 2, 4].map(speed => (
+        {presetSpeeds.map(speed => (
           <button
             key={speed}
             onClick={() => {
-              setClips(prev => prev.map(c => {
-                if (!selectedClipIds.has(c.id)) return c
-                const oldSpeed = c.speed
-                let newDuration = c.duration * (oldSpeed / speed)
-                const maxDur = getMaxClipDuration({ ...c, speed })
-                newDuration = Math.min(newDuration, maxDur)
-                newDuration = Math.max(0.5, newDuration)
-                return { ...c, speed, duration: newDuration }
-              }))
-              close()
+              applySpeedToSelectedClips(speed, true)
             }}
             className="px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors bg-zinc-700 text-zinc-400 hover:bg-zinc-600 hover:text-white"
           >
             {speed}x
           </button>
         ))}
+      </div>
+      <div className="px-3 pb-1.5 flex items-center gap-1.5">
+        <input
+          type="number"
+          min={0.25}
+          max={100}
+          step={0.25}
+          value={customSpeedInput}
+          placeholder="Custom"
+          onChange={(e) => setCustomSpeedInput(e.target.value)}
+          onKeyDown={(e) => {
+            e.stopPropagation()
+            if (e.key === 'Enter') applyCustomSpeed(true)
+          }}
+          className="w-16 bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-[10px] text-white text-right [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+          title="Custom speed"
+        />
+        <span className="text-[10px] text-zinc-500">x</span>
+        <button
+          onClick={() => applyCustomSpeed(true)}
+          className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-zinc-700 text-zinc-300 hover:bg-zinc-600 hover:text-white transition-colors"
+        >
+          Apply
+        </button>
       </div>
       <MenuItem icon={allMuted ? VolumeX : Volume2} label={allMuted ? 'Unmute All' : 'Mute All'}
         badge={allMuted ? 'ALL MUTED' : undefined} badgeClass="text-red-400"

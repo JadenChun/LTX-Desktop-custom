@@ -5,16 +5,23 @@ import { useAppSettings, type AppSettings } from '../contexts/AppSettingsContext
 import { ApiClient } from '../lib/api-client'
 import { logger } from '../lib/logger'
 import { ApiKeyHelperRow, LtxApiKeyInput, LtxApiKeyHelperRow } from './LtxApiKeyInput'
+import { MCP_MODULES, type McpModuleId } from '../lib/mcp-tool-manifest'
 
 interface SettingsModalProps {
   isOpen: boolean
   onClose: () => void
   initialTab?: TabId
+  showProjectSettings?: boolean
 }
 
-type TabId = 'general' | 'apiKeys' | 'inference' | 'promptEnhancer' | 'about'
+type TabId = 'general' | 'mcp' | 'apiKeys' | 'inference' | 'promptEnhancer' | 'about'
 
-export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
+export function SettingsModal({
+  isOpen,
+  onClose,
+  initialTab,
+  showProjectSettings = true,
+}: SettingsModalProps) {
   const { settings, updateSettings, saveLtxApiKey, saveFalApiKey, saveGeminiApiKey, forceApiGenerations } = useAppSettings()
   const onSettingsChange = (next: AppSettings) => updateSettings(next)
   const [activeTab, setActiveTab] = useState<TabId>('general')
@@ -37,6 +44,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   const [showModelLicense, setShowModelLicense] = useState(false)
   const [analyticsEnabled, setAnalyticsEnabled] = useState(false)
   const [projectAssetsPath, setProjectAssetsPath] = useState('')
+  const [isRestartingBackend, setIsRestartingBackend] = useState(false)
+  const [restartBackendError, setRestartBackendError] = useState<string | null>(null)
 
   // Sync active tab with initialTab prop when modal opens
   useEffect(() => {
@@ -70,10 +79,14 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
     window.electronAPI.getAnalyticsState()
       .then((state: { analyticsEnabled: boolean }) => setAnalyticsEnabled(state.analyticsEnabled))
       .catch(() => {})
-    window.electronAPI.getProjectAssetsPath()
-      .then((p: string) => setProjectAssetsPath(p))
-      .catch(() => {})
-  }, [isOpen])
+    if (showProjectSettings) {
+      window.electronAPI.getProjectAssetsPath()
+        .then((p: string) => setProjectAssetsPath(p))
+        .catch(() => {})
+      return
+    }
+    setProjectAssetsPath('')
+  }, [isOpen, showProjectSettings])
 
   // Fetch text encoder status when modal opens
   useEffect(() => {
@@ -251,8 +264,48 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
     }
   }
 
+  const handleToggleMcpModule = (moduleId: McpModuleId) => {
+    onSettingsChange({
+      ...settings,
+      mcpModules: {
+        ...settings.mcpModules,
+        [moduleId]: !settings.mcpModules[moduleId],
+      },
+    })
+  }
+
+  const handleToggleMcpTool = (moduleId: McpModuleId, toolId: string) => {
+    onSettingsChange({
+      ...settings,
+      mcpTools: {
+        ...settings.mcpTools,
+        [moduleId]: {
+          ...settings.mcpTools[moduleId],
+          [toolId]: !settings.mcpTools[moduleId][toolId],
+        },
+      },
+    })
+  }
+
+  const handleRestartBackend = async () => {
+    setIsRestartingBackend(true)
+    setRestartBackendError(null)
+
+    try {
+      const { hasLtxApiKey: _a, hasFalApiKey: _b, hasGeminiApiKey: _c, modelsDir: _d, ...syncPayload } = settings
+      await ApiClient.updateSettings(syncPayload)
+      await window.electronAPI.restartPythonBackend()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to restart backend'
+      setRestartBackendError(message)
+    } finally {
+      setIsRestartingBackend(false)
+    }
+  }
+
   const tabs = [
     { id: 'general' as TabId, label: 'General', icon: Settings },
+    { id: 'mcp' as TabId, label: 'MCP', icon: Zap },
     { id: 'apiKeys' as TabId, label: 'API Keys', icon: KeyRound },
     { id: 'inference' as TabId, label: 'Inference', icon: Sliders },
     { id: 'promptEnhancer' as TabId, label: 'Prompt Enhancer', icon: Sparkles },
@@ -268,7 +321,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
       />
 
       {/* Modal */}
-      <div className="relative bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-xl mx-4">
+      <div className="relative bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-2xl mx-4">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800">
           <div className="flex items-center gap-2">
@@ -310,33 +363,34 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         <div className="px-6 py-5 space-y-6 h-[60vh] overflow-y-auto">
           {activeTab === 'general' && (
             <>
-              {/* Project Assets Path */}
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <Download className="h-4 w-4 text-blue-400" />
-                  <h3 className="text-sm font-semibold text-white">Project Assets Path</h3>
-                </div>
-                <p className="text-xs text-zinc-500 leading-relaxed">
-                  Where generated video and image assets are saved. Each project gets a subfolder.
-                </p>
-                <div className="flex gap-2">
-                  <div className="flex-1 px-3 py-2 rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-300 text-sm truncate select-text">
-                    {projectAssetsPath || <span className="text-zinc-600">Not set</span>}
+              {showProjectSettings && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Download className="h-4 w-4 text-blue-400" />
+                    <h3 className="text-sm font-semibold text-white">Project Assets Path</h3>
                   </div>
-                  <Button
-                    variant="outline"
-                    className="border-zinc-700 flex-shrink-0"
-                    onClick={async () => {
-                      const result = await window.electronAPI.openProjectAssetsPathChangeDialog()
-                      if (result.success) {
-                        setProjectAssetsPath(result.path)
-                      }
-                    }}
-                  >
-                    <Folder className="h-4 w-4" />
-                  </Button>
+                  <p className="text-xs text-zinc-500 leading-relaxed">
+                    Where generated video and image assets are saved. Each project gets a subfolder.
+                  </p>
+                  <div className="flex gap-2">
+                    <div className="flex-1 px-3 py-2 rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-300 text-sm truncate select-text">
+                      {projectAssetsPath || <span className="text-zinc-600">Not set</span>}
+                    </div>
+                    <Button
+                      variant="outline"
+                      className="border-zinc-700 flex-shrink-0"
+                      onClick={async () => {
+                        const result = await window.electronAPI.openProjectAssetsPathChangeDialog()
+                        if (result.success) {
+                          setProjectAssetsPath(result.path)
+                        }
+                      }}
+                    >
+                      <Folder className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </div>
-              </div>
+              )}
 
               {!forceApiGenerations && (
                 <div className="space-y-4">
@@ -730,6 +784,147 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                   </button>
                 </div>
 
+              </div>
+            </>
+          )}
+
+          {activeTab === 'mcp' && (
+            <>
+              <div className="space-y-4">
+                <div className="flex items-center gap-2">
+                  <Zap className="h-4 w-4 text-blue-400" />
+                  <h3 className="text-sm font-semibold text-white">MCP Tool Surface</h3>
+                </div>
+
+                <p className="text-xs text-zinc-500 leading-relaxed">
+                  Control which MCP tool modules are exposed to agents. These changes are persisted immediately,
+                  but the MCP server reads them at backend startup, so they take effect after restarting the backend or app.
+                </p>
+
+                <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-4">
+                  <div className="flex items-start gap-2.5">
+                    <AlertCircle className="h-4 w-4 text-amber-400 mt-0.5 flex-shrink-0" />
+                    <div className="space-y-1">
+                      <p className="text-sm text-amber-300 font-medium">Restart required</p>
+                      <p className="text-xs text-zinc-400 leading-relaxed">
+                        Tool registration happens when the backend starts. Turning a module or tool on here updates the saved config,
+                        but connected agents will only see the new tool list after restart.
+                      </p>
+                      <div className="pt-2">
+                        <Button
+                          onClick={() => {
+                            void handleRestartBackend()
+                          }}
+                          disabled={isRestartingBackend}
+                          className="bg-amber-500 text-black hover:bg-amber-400 disabled:opacity-60"
+                        >
+                          {isRestartingBackend ? 'Restarting Backend...' : 'Save And Restart Backend'}
+                        </Button>
+                      </div>
+                      {restartBackendError && (
+                        <p className="text-xs text-red-300 leading-relaxed">
+                          {restartBackendError}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-4 pt-2">
+                  {MCP_MODULES.map((module) => {
+                    const moduleEnabled = settings.mcpModules[module.id]
+                    const enabledTools = module.tools.filter((tool) => settings.mcpTools[module.id][tool.id]).length
+
+                    return (
+                      <div
+                        key={module.id}
+                        className="bg-zinc-800/50 rounded-lg p-4 space-y-4 border border-zinc-700/50"
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <h4 className="text-sm font-semibold text-white">{module.label}</h4>
+                              <span className="text-[11px] text-zinc-400 bg-zinc-900/80 px-2 py-0.5 rounded-full">
+                                {enabledTools}/{module.tools.length} tools enabled
+                              </span>
+                            </div>
+                            <p className="text-xs text-zinc-500 leading-relaxed">
+                              {module.description}
+                            </p>
+                          </div>
+
+                          <button
+                            onClick={() => handleToggleMcpModule(module.id)}
+                            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                              moduleEnabled ? 'bg-blue-500' : 'bg-zinc-700'
+                            }`}
+                          >
+                            <span
+                              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                                moduleEnabled ? 'translate-x-5' : 'translate-x-0'
+                              }`}
+                            />
+                          </button>
+                        </div>
+
+                        <div className={`text-xs px-2 py-1 rounded inline-flex items-center gap-1.5 ${
+                          moduleEnabled
+                            ? 'bg-blue-500/10 text-blue-400'
+                            : 'bg-zinc-800 text-zinc-500'
+                        }`}>
+                          <div className={`w-1.5 h-1.5 rounded-full ${
+                            moduleEnabled ? 'bg-blue-400' : 'bg-zinc-600'
+                          }`} />
+                          {moduleEnabled ? `${module.label} module enabled` : `${module.label} module disabled`}
+                        </div>
+
+                        <div className="space-y-3">
+                          {module.tools.map((tool) => {
+                            const toolEnabled = settings.mcpTools[module.id][tool.id]
+
+                            return (
+                              <div
+                                key={tool.id}
+                                className={`bg-zinc-800/40 rounded-lg px-4 py-3 border transition-colors ${
+                                  moduleEnabled
+                                    ? 'border-zinc-700/50'
+                                    : 'border-zinc-800 opacity-60'
+                                }`}
+                              >
+                                <div className="flex items-start justify-between gap-4">
+                                  <div className="flex-1">
+                                    <div className="flex items-center gap-2 mb-1">
+                                      <code className="text-xs text-blue-300 bg-zinc-900/80 px-1.5 py-0.5 rounded">{tool.label}</code>
+                                    </div>
+                                    <p className="text-xs text-zinc-500 leading-relaxed">
+                                      {tool.description}
+                                    </p>
+                                  </div>
+
+                                  <button
+                                    disabled={!moduleEnabled}
+                                    onClick={() => handleToggleMcpTool(module.id, tool.id)}
+                                    className={`relative inline-flex h-6 w-11 flex-shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                                      moduleEnabled
+                                        ? (toolEnabled ? 'bg-blue-500 cursor-pointer' : 'bg-zinc-700 cursor-pointer')
+                                        : 'bg-zinc-800 cursor-not-allowed'
+                                    }`}
+                                  >
+                                    <span
+                                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                                        moduleEnabled && toolEnabled ? 'translate-x-5' : 'translate-x-0'
+                                      }`}
+                                    />
+                                  </button>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             </>
           )}

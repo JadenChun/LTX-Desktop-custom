@@ -53,10 +53,22 @@ export function fileHasAudio(ffmpegPath: string, filePath: string): boolean {
 }
 
 
-/** Run an ffmpeg command and return a promise. Logs stderr and sets activeExportProcess. */
-export function runFfmpeg(ffmpegPath: string, args: string[]): Promise<{ success: boolean; error?: string }> {
+/** Parse FFmpeg's time= output into seconds */
+function parseTimeToSeconds(timeStr: string): number {
+  const match = timeStr.match(/(\d+):(\d+):(\d+(?:\.\d+)?)/)
+  if (!match) return 0
+  return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3])
+}
+
+/** Run an ffmpeg command and return a promise. Logs stderr and sets activeExportProcess.
+ *  onProgress is called with elapsed seconds parsed from FFmpeg's time= output. */
+export function runFfmpeg(
+  ffmpegPath: string,
+  args: string[],
+  onProgress?: (timeSec: number) => void,
+): Promise<{ success: boolean; error?: string }> {
   return new Promise((resolve) => {
-    logger.info( `[ffmpeg] spawn: ${args.join(' ').slice(0, 400)}`)
+    logger.info(`[ffmpeg] spawn: ${args.join(' ').slice(0, 400)}`)
     const proc = spawn(ffmpegPath, args, { stdio: ['pipe', 'pipe', 'pipe'] })
     activeExportProcess = proc
     let stderrLog = ''
@@ -66,7 +78,14 @@ export function runFfmpeg(ffmpegPath: string, args: string[]): Promise<{ success
       const lines = text.trim().split('\n')
       for (const line of lines) {
         if (line.includes('frame=') || line.includes('Error') || line.includes('error')) {
-          logger.info( `[ffmpeg] ${line.trim().slice(0, 200)}`)
+          logger.info(`[ffmpeg] ${line.trim().slice(0, 200)}`)
+        }
+        // Parse time= for progress reporting
+        if (onProgress) {
+          const timeMatch = line.match(/time=\s*([\d:.]+)/)
+          if (timeMatch) {
+            onProgress(parseTimeToSeconds(timeMatch[1]))
+          }
         }
       }
     })
@@ -76,7 +95,7 @@ export function runFfmpeg(ffmpegPath: string, args: string[]): Promise<{ success
         resolve({ success: true })
       } else {
         const errLines = stderrLog.split('\n').filter(l => l.trim()).slice(-5).join('\n')
-        logger.error( `[ffmpeg] exited ${code}:\n${errLines}`)
+        logger.error(`[ffmpeg] exited ${code}:\n${errLines}`)
         resolve({ success: false, error: `FFmpeg failed (code ${code}): ${errLines.slice(0, 300)}` })
       }
     })
@@ -176,7 +195,7 @@ export function getVideoDimensions(videoPath: string): { width: number; height: 
 
 export function stopExportProcess(): void {
   if (activeExportProcess) {
-    logger.info( 'Stopping active export process...')
+    logger.info('Stopping active export process...')
     activeExportProcess.kill()
     activeExportProcess = null
   }

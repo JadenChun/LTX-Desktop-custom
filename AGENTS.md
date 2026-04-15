@@ -39,6 +39,7 @@ PRs must pass: `pnpm typecheck` + `pnpm backend:test` + frontend Vite build.
 - **Backend calls**: Always use `backendFetch` from `frontend/lib/backend.ts` for app backend HTTP requests (it attaches auth/session details). Do not call `fetch` directly for backend endpoints.
 - **Styling**: Tailwind with custom semantic color tokens via CSS variables; utilities from `class-variance-authority` + `clsx` + `tailwind-merge`
 - **No frontend tests** currently exist
+- **Subtitle vs text clip rule**: Spoken captions, transcript text, and subtitles must use subtitle tracks/cues. Do not emulate subtitles with text clips. Text clips are only for designed editorial overlays such as titles, lower thirds, labels, and callouts.
 
 ## Backend Architecture
 

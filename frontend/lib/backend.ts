@@ -22,3 +22,9 @@ export async function backendWsUrl(path: string): Promise<string> {
   const sep = path.includes('?') ? '&' : '?'
   return `${ws}${path}${sep}token=${token}`
 }
+
+export async function backendSseUrl(path: string): Promise<string> {
+  const { url, token } = await getBackendCredentials()
+  const sep = path.includes('?') ? '&' : '?'
+  return `${url}${path}${sep}token=${token}`
+}

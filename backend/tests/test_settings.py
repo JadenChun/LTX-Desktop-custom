@@ -19,6 +19,12 @@ class TestGetSettings:
         data = r.json()
         assert data["useTorchCompile"] is False
         assert data["loadOnStartup"] is False
+        assert data["mcpModules"]["project"] is True
+        assert data["mcpModules"]["subtitle"] is True
+        assert data["mcpModules"]["ai_generation"] is False
+        assert data["mcpTools"]["timeline"]["preview_clip"] is True
+        assert data["mcpTools"]["text_overlay"]["add_text_clip"] is True
+        assert data["mcpTools"]["ai_generation"]["ai_retake_clip"] is True
         assert data["hasLtxApiKey"] is False
         assert data["userPrefersLtxApiVideoGenerations"] is False
         assert data["hasFalApiKey"] is False
@@ -60,6 +66,24 @@ class TestPostSettings:
         assert r.status_code == 200
         assert test_state.state.app_settings.use_torch_compile is True
         assert test_state.state.app_settings.load_on_startup is True
+
+    def test_update_mcp_tool_toggles(self, client, test_state):
+        r = client.post(
+            "/api/settings",
+            json={
+                "mcpModules": {"ai_generation": True, "text_overlay": False},
+                "mcpTools": {
+                    "ai_generation": {"generate_video": False, "fill_gap": False},
+                    "timeline": {"preview_clip": False},
+                },
+            },
+        )
+        assert r.status_code == 200
+        assert test_state.state.app_settings.mcp_modules["ai_generation"] is True
+        assert test_state.state.app_settings.mcp_modules["text_overlay"] is False
+        assert test_state.state.app_settings.mcp_tools["ai_generation"]["generate_video"] is False
+        assert test_state.state.app_settings.mcp_tools["ai_generation"]["fill_gap"] is False
+        assert test_state.state.app_settings.mcp_tools["timeline"]["preview_clip"] is False
 
     def test_update_fast_model(self, client, test_state):
         r = client.post("/api/settings", json={"fastModel": {"useUpscaler": False}})
@@ -258,6 +282,24 @@ class TestSettingsPersistence:
         loaded = self._new_state(test_state, default_app_settings)
         assert loaded.state.app_settings.prompt_enhancer_enabled_t2v is False
         assert loaded.state.app_settings.prompt_enhancer_enabled_i2v is False
+
+    def test_legacy_ai_mcp_keys_migrate(self, test_state, default_app_settings):
+        test_state.config.settings_file.write_text(
+            json.dumps(
+                {
+                    "mcp_ai_generation_tools_enabled": True,
+                    "mcp_ai_generate_video_enabled": False,
+                    "mcp_ai_fill_gap_enabled": False,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        loaded = self._new_state(test_state, default_app_settings)
+        assert loaded.state.app_settings.mcp_modules["ai_generation"] is True
+        assert loaded.state.app_settings.mcp_tools["ai_generation"]["generate_video"] is False
+        assert loaded.state.app_settings.mcp_tools["ai_generation"]["fill_gap"] is False
+        assert loaded.state.app_settings.mcp_tools["ai_generation"]["ai_retake_clip"] is True
 
     def test_user_prefers_api_video_generations_persists(self, client, test_state, default_app_settings):
         r = client.post("/api/settings", json={"userPrefersLtxApiVideoGenerations": True})

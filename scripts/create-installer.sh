@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # create-installer.sh
-# Runs electron-builder to produce the installer (dmg/exe).
+# Runs electron-builder to produce distributable desktop packages.
 # This is the ONLY build stage that needs code-signing secrets.
 #
 # Expects the frontend to be built and python-embed to be ready.
@@ -56,8 +56,28 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 RELEASE_DIR="$PROJECT_DIR/release"
+BACKEND_DIR="$PROJECT_DIR/backend"
+HASH_FILE="$PROJECT_DIR/python-deps-hash.txt"
+EMBEDDED_HASH_FILE="$PROJECT_DIR/python-embed/deps-hash.txt"
 
 cd "$PROJECT_DIR"
+
+if [ -z "${LTX_RELEASE_OWNER:-}" ] || [ -z "${LTX_RELEASE_REPO:-}" ]; then
+  PACKAGE_HOMEPAGE="$(node -e "const pkg=require('./package.json'); process.stdout.write(typeof pkg.homepage==='string' ? pkg.homepage : '')")"
+  if [ -n "$PACKAGE_HOMEPAGE" ]; then
+    REPO_PATH="$(node -e "const homepage=process.argv[1]; try { const u=new URL(homepage); if (/github\\.com$/i.test(u.host)) process.stdout.write(u.pathname.replace(/^\\/+|\\/+$/g,'')); } catch {}" "$PACKAGE_HOMEPAGE")"
+    if [ -n "$REPO_PATH" ]; then
+      RELEASE_OWNER_FROM_HOMEPAGE="${REPO_PATH%%/*}"
+      RELEASE_REPO_FROM_HOMEPAGE="${REPO_PATH#*/}"
+      if [ -z "${LTX_RELEASE_OWNER:-}" ]; then export LTX_RELEASE_OWNER="$RELEASE_OWNER_FROM_HOMEPAGE"; fi
+      if [ -z "${LTX_RELEASE_REPO:-}" ]; then export LTX_RELEASE_REPO="$RELEASE_REPO_FROM_HOMEPAGE"; fi
+    fi
+  fi
+fi
+
+export LTX_RELEASE_OWNER="${LTX_RELEASE_OWNER:-Lightricks}"
+export LTX_RELEASE_REPO="${LTX_RELEASE_REPO:-ltx-desktop}"
+echo "Release source: $LTX_RELEASE_OWNER/$LTX_RELEASE_REPO"
 
 # ============================================================
 # Verify prerequisites
@@ -71,6 +91,22 @@ if [ "$PLATFORM" != "linux" ] && [ ! -d "python-embed" ]; then
   echo "ERROR: Python environment not found. Run local-build.sh or prepare-python.sh first."
   exit 1
 fi
+
+echo "Generating python dependency hash..."
+PYTHON_VERSION="$(tr -d '[:space:]' < "$BACKEND_DIR/.python-version")"
+if command -v sha256sum >/dev/null 2>&1; then
+  LOCK_HASH="$(sha256sum "$BACKEND_DIR/uv.lock" | awk '{print $1}')"
+  DEPS_HASH="$(printf 'platform=%s\npython-version=%s\nuv-lock=%s' "$PLATFORM" "$PYTHON_VERSION" "$LOCK_HASH" | sha256sum | awk '{print $1}')"
+elif command -v shasum >/dev/null 2>&1; then
+  LOCK_HASH="$(shasum -a 256 "$BACKEND_DIR/uv.lock" | awk '{print $1}')"
+  DEPS_HASH="$(printf 'platform=%s\npython-version=%s\nuv-lock=%s' "$PLATFORM" "$PYTHON_VERSION" "$LOCK_HASH" | shasum -a 256 | awk '{print $1}')"
+else
+  echo "ERROR: sha256sum or shasum is required to generate python-deps-hash.txt"
+  exit 1
+fi
+printf '%s' "$DEPS_HASH" > "$HASH_FILE"
+printf '%s' "$DEPS_HASH" > "$EMBEDDED_HASH_FILE"
+echo "Python deps hash: $DEPS_HASH"
 
 # ============================================================
 # Build with electron-builder
@@ -90,7 +126,7 @@ else
   if [ -n "$PUBLISH" ]; then
     PUBLISH_ARGS="--publish $PUBLISH"
   fi
-  echo "Packaging installer..."
+  echo "Packaging desktop app..."
   pnpm exec electron-builder $BUILDER_ARGS $PUBLISH_ARGS
 fi
 echo ""

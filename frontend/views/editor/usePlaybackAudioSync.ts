@@ -52,6 +52,27 @@ function getClipStartTargetTime(clip: TimelineClip, mediaDuration: number): numb
     : Math.max(0, clip.trimStart)
 }
 
+function getAudioFadeVolume(clip: TimelineClip, timelineTime: number): number {
+  const baseVolume = clip.volume ?? 1
+  const clipStart = clip.startTime
+  const clipEnd = clip.startTime + clip.duration
+  if (timelineTime < clipStart || timelineTime > clipEnd) return 0
+
+  const fadeInDuration = Math.max(0, Math.min(clip.audioFadeInDuration ?? 0, clip.duration))
+  const fadeOutDuration = Math.max(0, Math.min(clip.audioFadeOutDuration ?? 0, clip.duration))
+  const timeInClip = timelineTime - clipStart
+  let fadeFactor = 1
+
+  if (fadeInDuration > 0 && timeInClip < fadeInDuration) {
+    fadeFactor *= timeInClip / fadeInDuration
+  }
+  if (fadeOutDuration > 0 && timeInClip > clip.duration - fadeOutDuration) {
+    fadeFactor *= Math.max(0, (clipEnd - timelineTime) / fadeOutDuration)
+  }
+
+  return baseVolume * fadeFactor
+}
+
 export function usePlaybackAudioSync(params: UsePlaybackAudioSyncParams) {
   const { playbackTimeRef } = params
   const isPlaying = useEditorStore(selectIsPlaying)
@@ -166,7 +187,7 @@ export function usePlaybackAudioSync(params: UsePlaybackAudioSyncParams) {
           const track = currentTracks[clip.trackIndex]
           const isSoloMuted = anySoloed && !track?.solo
           el.muted = clip.muted || track?.muted || isSoloMuted || false
-          el.volume = clip.volume
+          el.volume = getAudioFadeVolume(clip, atTime)
 
           if (!el.__audioPlaying || isNewElement) {
             const target = computeTarget(el, atTime)
@@ -307,7 +328,7 @@ export function usePlaybackAudioSync(params: UsePlaybackAudioSyncParams) {
       const track = tracks[clip.trackIndex]
       const isSoloMuted = anySoloed && !track?.solo
       el.muted = clip.muted || track?.muted || isSoloMuted || false
-      el.volume = clip.volume
+      el.volume = getAudioFadeVolume(clip, currentTime)
 
       if (el.readyState < 2) continue
 

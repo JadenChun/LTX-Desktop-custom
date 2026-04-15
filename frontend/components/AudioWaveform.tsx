@@ -45,7 +45,11 @@ export async function computeWaveform(url: string, buckets: number = 800): Promi
     let arrayBuffer: ArrayBuffer
 
     if (url.startsWith('file://') && (window as any).electronAPI?.readLocalFile) {
-      const { data } = await (window as any).electronAPI.readLocalFile({ filePath: url })
+      const electronAPI = (window as any).electronAPI
+      if (electronAPI?.approvePaths) {
+        await electronAPI.approvePaths({ filePaths: [url] })
+      }
+      const { data } = await electronAPI.readLocalFile({ filePath: url })
       arrayBuffer = base64ToArrayBuffer(data)
     } else {
       const response = await fetch(url)

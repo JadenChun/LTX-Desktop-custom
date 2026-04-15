@@ -51,7 +51,9 @@ function extractPcmBuffer(
 
 interface AudioSource {
   filePath: string; trimStart: number; trimEnd: number;
-  timelineStart: number; speed: number; reversed: boolean; volume: number;
+  timelineStart: number; duration: number; speed: number; reversed: boolean; volume: number;
+  audioFadeInDuration?: number;
+  audioFadeOutDuration?: number;
 }
 
 /**
@@ -70,36 +72,42 @@ export async function mixAudioToPcm(
   for (const c of clips) {
     if (c.muted || c.volume <= 0) continue
     const fp = c.path
-    if (!fp || !fs.existsSync(fp)) continue
+    if (!fp) {
+      logger.warn(`[Export] Skipping audio clip: no file path available`)
+      continue
+    }
+    if (!fs.existsSync(fp)) {
+      logger.warn(`[Export] Skipping audio clip: file does not exist at path: ${fp}`)
+      continue
+    }
 
-    if (c.type === 'audio') {
-      audioSources.push({
-        filePath: fp,
-        trimStart: c.trimStart,
-        trimEnd: c.trimStart + c.duration * c.speed,
-        timelineStart: c.startTime,
-        speed: c.speed,
-        reversed: c.reversed,
-        volume: c.volume,
-      })
-    } else if (c.type === 'video') {
-      if (!audioProbeCache.has(fp)) {
-        audioProbeCache.set(fp, fileHasAudio(ffmpegPath, fp))
+    const isAudio = c.type === 'audio'
+    const isVideo = c.type === 'video'
+
+    if (isAudio || isVideo) {
+      if (isVideo) {
+        if (!audioProbeCache.has(fp)) {
+          audioProbeCache.set(fp, fileHasAudio(ffmpegPath, fp))
+        }
+        if (!audioProbeCache.get(fp)) continue
       }
-      if (!audioProbeCache.get(fp)) continue
+
       audioSources.push({
         filePath: fp,
         trimStart: c.trimStart,
         trimEnd: c.trimStart + c.duration * c.speed,
         timelineStart: c.startTime,
+        duration: c.duration,
         speed: c.speed,
         reversed: c.reversed,
         volume: c.volume,
+        audioFadeInDuration: c.audioFadeInDuration,
+        audioFadeOutDuration: c.audioFadeOutDuration,
       })
     }
   }
 
-  logger.info( `[Export] Audio: ${audioSources.length} source(s) from ${clips.length} clip(s)`)
+  logger.info(`[Export] Audio: ${audioSources.length} source(s) from ${clips.length} clip(s)`)
 
   // Create master mix buffer (Float64 to accumulate without clipping)
   const totalFrames = Math.ceil(totalDuration * SAMPLE_RATE)
@@ -109,22 +117,40 @@ export async function mixAudioToPcm(
   // Extract each source and mix into the master buffer
   for (let i = 0; i < audioSources.length; i++) {
     const src = audioSources[i]
-    logger.info( `[Export] Audio ${i + 1}/${audioSources.length}: ${path.basename(src.filePath)} trim=${src.trimStart.toFixed(2)}-${src.trimEnd.toFixed(2)} @${src.timelineStart.toFixed(2)}s vol=${src.volume}`)
+    logger.info(`[Export] Audio ${i + 1}/${audioSources.length}: ${path.basename(src.filePath)} trim=${src.trimStart.toFixed(2)}-${src.trimEnd.toFixed(2)} @${src.timelineStart.toFixed(2)}s vol=${src.volume}`)
     try {
       const pcm = await extractPcmBuffer(ffmpegPath, src.filePath, src.trimStart, src.trimEnd, src.speed, src.reversed)
       const startFrame = Math.round(src.timelineStart * SAMPLE_RATE)
       const startSample = startFrame * NUM_CHANNELS
       const numPcmSamples = Math.floor(pcm.length / BYTES_PER_SAMPLE)
 
+      const clipDuration = src.duration
+      const fadeInDuration = Math.max(0, Math.min(src.audioFadeInDuration ?? 0, clipDuration))
+      const fadeOutDuration = Math.max(0, Math.min(src.audioFadeOutDuration ?? 0, clipDuration))
+
       for (let s = 0; s < numPcmSamples; s++) {
         const destIdx = startSample + s
         if (destIdx < 0 || destIdx >= totalSamples) continue
+
+        // Calculate volume factor based on transitions
+        let fadeFactor = 1.0
+        const frameIdx = Math.floor(s / NUM_CHANNELS)
+        const timeInClip = frameIdx / SAMPLE_RATE
+
+        if (fadeInDuration > 0 && timeInClip < fadeInDuration) {
+          fadeFactor *= (timeInClip / fadeInDuration)
+        }
+        if (fadeOutDuration > 0 && timeInClip > (clipDuration - fadeOutDuration)) {
+          const fadeOutTime = clipDuration - timeInClip
+          fadeFactor *= Math.max(0, fadeOutTime / fadeOutDuration)
+        }
+
         const value = pcm.readInt16LE(s * BYTES_PER_SAMPLE)
-        mixBuffer[destIdx] += value * src.volume
+        mixBuffer[destIdx] += value * src.volume * fadeFactor
       }
-      logger.info( `[Export] Audio ${i + 1}: mixed ${numPcmSamples} samples (${(numPcmSamples / SAMPLE_RATE / NUM_CHANNELS).toFixed(2)}s) at offset frame ${startFrame}`)
+      logger.info(`[Export] Audio ${i + 1}: mixed ${numPcmSamples} samples (${(numPcmSamples / SAMPLE_RATE / NUM_CHANNELS).toFixed(2)}s) at offset frame ${startFrame}`)
     } catch (err: any) {
-      logger.warn( `[Export] Failed to extract audio from ${src.filePath}: ${err.message}`)
+      logger.warn(`[Export] Failed to extract audio from ${src.filePath}: ${err.message}`)
     }
   }
 

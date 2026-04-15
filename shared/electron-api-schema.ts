@@ -13,6 +13,30 @@ export type IpcResult<T extends z.ZodRawShape> = z.infer<ReturnType<typeof ipcRe
 
 const emptyResult = ipcResult({})
 
+const kenBurnsKeyframe = z.object({
+  scale: z.number(),
+  focusX: z.number(),
+  focusY: z.number(),
+})
+
+const kenBurnsMotion = z.object({
+  type: z.literal('ken_burns'),
+  start: kenBurnsKeyframe,
+  end: kenBurnsKeyframe,
+  easing: z.enum(['linear', 'easeInOut']).optional(),
+})
+
+const colorCorrection = z.object({
+  brightness: z.number(),
+  contrast: z.number(),
+  saturation: z.number(),
+  temperature: z.number().optional(),
+  tint: z.number().optional(),
+  exposure: z.number().optional(),
+  highlights: z.number().optional(),
+  shadows: z.number().optional(),
+})
+
 const exportClip = z.object({
   path: z.string(),
   type: z.string(),
@@ -27,6 +51,12 @@ const exportClip = z.object({
   trackIndex: z.number(),
   muted: z.boolean(),
   volume: z.number(),
+  transitionIn: z.object({ type: z.string(), duration: z.number() }).optional(),
+  transitionOut: z.object({ type: z.string(), duration: z.number() }).optional(),
+  audioFadeInDuration: z.number().optional(),
+  audioFadeOutDuration: z.number().optional(),
+  motion: kenBurnsMotion.optional(),
+  colorCorrection: colorCorrection.optional(),
 })
 
 const exportSubtitle = z.object({
@@ -41,6 +71,38 @@ const exportSubtitle = z.object({
     backgroundColor: z.string(),
     position: z.string(),
     italic: z.boolean(),
+    highlightEnabled: z.boolean().optional(),
+    highlightColor: z.string().optional(),
+  }),
+})
+
+const exportTextOverlay = z.object({
+  text: z.string(),
+  startTime: z.number(),
+  endTime: z.number(),
+  trackIndex: z.number(),
+  style: z.object({
+    fontFamily: z.string(),
+    fontSize: z.number(),
+    fontWeight: z.string(),
+    fontStyle: z.string(),
+    color: z.string(),
+    backgroundColor: z.string(),
+    textAlign: z.string(),
+    positionX: z.number(),
+    positionY: z.number(),
+    strokeColor: z.string(),
+    strokeWidth: z.number(),
+    shadowColor: z.string(),
+    shadowBlur: z.number(),
+    shadowOffsetX: z.number(),
+    shadowOffsetY: z.number(),
+    letterSpacing: z.number(),
+    lineHeight: z.number(),
+    maxWidth: z.number(),
+    padding: z.number(),
+    borderRadius: z.number(),
+    opacity: z.number(),
   }),
 })
 
@@ -56,6 +118,26 @@ const backendHealthStatus = z.object({
 })
 
 export type BackendHealthStatus = z.infer<typeof backendHealthStatus>
+const mcpProjectSummary = z.object({
+  id: z.string(),
+  name: z.string().optional(),
+  createdAt: z.number().optional(),
+  updatedAt: z.number().optional(),
+  assetCount: z.number(),
+  clipCount: z.number(),
+})
+const mcpProjectPayload = z.record(z.string(), z.unknown())
+const putMcpProjectResult = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('ok'), project: mcpProjectPayload }),
+  z.object({ status: z.literal('conflict'), project: mcpProjectPayload }),
+  z.object({ status: z.literal('not_found') }),
+])
+const mcpProjectChangeEvent = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('updated'), projectId: z.string(), updatedAt: z.number() }),
+  z.object({ kind: z.literal('deleted'), projectId: z.string() }),
+])
+
+export type McpProjectChangeEvent = z.infer<typeof mcpProjectChangeEvent>
 
 export const electronAPISchemas = {
   // App info
@@ -119,6 +201,10 @@ export const electronAPISchemas = {
     input: z.object({ filePath: z.string() }),
     output: z.void(),
   },
+  approvePaths: {
+    input: z.object({ filePaths: z.array(z.string()) }),
+    output: z.void(),
+  },
 
   // Logs
   getLogs: {
@@ -177,6 +263,26 @@ export const electronAPISchemas = {
     input: z.object({}),
     output: z.string(),
   },
+  listMcpProjects: {
+    input: z.object({}),
+    output: z.array(mcpProjectSummary),
+  },
+  getMcpProject: {
+    input: z.object({ projectId: z.string() }),
+    output: mcpProjectPayload,
+  },
+  putMcpProject: {
+    input: z.object({
+      projectId: z.string(),
+      project: mcpProjectPayload,
+      ifMatch: z.number().optional(),
+    }),
+    output: putMcpProjectResult,
+  },
+  deleteMcpProject: {
+    input: z.object({ projectId: z.string() }),
+    output: z.object({ deleted: z.boolean() }),
+  },
   openProjectAssetsPathChangeDialog: {
     input: z.object({}),
     output: ipcResult({ path: z.string() }),
@@ -232,6 +338,7 @@ export const electronAPISchemas = {
       quality: z.number(),
       letterbox: z.object({ ratio: z.number(), color: z.string(), opacity: z.number() }).optional(),
       subtitles: z.array(exportSubtitle).optional(),
+      textOverlays: z.array(exportTextOverlay).optional(),
     }),
     output: emptyResult,
   },
@@ -250,6 +357,10 @@ export const electronAPISchemas = {
     output: z.void(),
   },
   startPythonBackend: {
+    input: z.object({}),
+    output: z.void(),
+  },
+  restartPythonBackend: {
     input: z.object({}),
     output: z.void(),
   },
@@ -303,6 +414,9 @@ export type ElectronAPI = InvokeAPI & {
   onPythonSetupProgress: (cb: (data: unknown) => void) => void
   removePythonSetupProgress: () => void
   onBackendHealthStatus: (cb: (data: BackendHealthStatus) => void) => (() => void)
+  onMcpProjectChanged: (cb: (event: McpProjectChangeEvent) => void) => (() => void)
+  onExportProgress: (cb: (percent: number) => void) => void
+  removeExportProgress: () => void
   getPathForFile: (file: File) => string
   platform: string
 }

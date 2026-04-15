@@ -1,6 +1,6 @@
-appId: com.lightricks.ltx-desktop
+appId: com.jadenchun.ltxdesktopcustom
 productName: LTX Desktop
-copyright: Copyright © 2026 Lightricks
+copyright: Copyright © 2026 JadenChun
 
 directories:
   output: release
@@ -29,22 +29,28 @@ extraResources:
       - "!outputs/**"
       - "!models/**"
       - "!tests/**"
+  - from: python-embed
+    to: python
+    filter:
+      - "**/*"
+      - "!__pycache__/**"
+      - "!*.pyc"
   - from: python-deps-hash.txt
     to: python-deps-hash.txt
 
 win:
   target:
-    - target: nsis
+    - target: zip
       arch:
         - x64
   icon: resources/icon.ico
-  artifactName: ${productName}-Setup.${ext}
-  azureSignOptions:
-    publisherName: Lightricks US Inc
-    endpoint: https://eus.codesigning.azure.net/
-    certificateProfileName: ltx-desktop-trusted
-    codeSigningAccountName: ltx-trusted
-    excludeEnvironmentCredential: true
+  artifactName: ${productName}-Windows-${version}.${ext}
+  # azureSignOptions:
+  #   publisherName: Lightricks US Inc
+  #   endpoint: https://eus.codesigning.azure.net/
+  #   certificateProfileName: ltx-desktop-trusted
+  #   codeSigningAccountName: ltx-trusted
+  #   excludeEnvironmentCredential: true
 
 nsis:
   oneClick: false
@@ -68,13 +74,6 @@ mac:
     # binaries, hitting the macOS 10240 open-files-per-process limit.
     - "/python/.*\\.(py|pyc|pyi|pxd|pyx|h|hpp|cpp|c|cuh|cu|tcl|txt|json|yaml|yml|toml|cfg|md|rst|html|css|enc|msg|cmake|gif|png|jpg|svg|xml|jinja|typed|al)$"
     - "/python/.*\\.dist-info/"
-  extraResources:
-    - from: python-embed
-      to: python
-      filter:
-        - "**/*"
-        - "!__pycache__/**"
-        - "!*.pyc"
   target:
     - target: dmg
       arch:
@@ -117,5 +116,5 @@ deb:
 
 publish:
   provider: github
-  owner: Lightricks
-  repo: ltx-desktop
+  owner: ${env.LTX_RELEASE_OWNER}
+  repo: ${env.LTX_RELEASE_REPO}

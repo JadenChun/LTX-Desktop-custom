@@ -74,6 +74,7 @@ import {
   useEditorStore,
   type EditorStoreApi,
 } from './editor/editor-store'
+import type { EditorModel, EditorState } from './editor/editor-state'
 import { GenerationErrorDialog } from '../components/GenerationErrorDialog'
 import { SubtitleTrackStyleEditor } from './editor/SubtitleTrackStyleEditor'
 
@@ -89,6 +90,81 @@ interface VideoEditorWithStoreProps {
   setCurrentProject: (project: Project) => void
 }
 
+function areEditorModelsEquivalent(left: EditorModel, right: EditorModel): boolean {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function syncEditorStateFromProject(prevState: EditorState, nextEditorModel: EditorModel): EditorState {
+  const timelineIds = new Set(nextEditorModel.timelines.map(timeline => timeline.id))
+  const clipIds = new Set(nextEditorModel.timelines.flatMap(timeline => timeline.clips.map(clip => clip.id)))
+  const subtitleIds = new Set(
+    nextEditorModel.timelines.flatMap(timeline => (timeline.subtitles ?? []).map(subtitle => subtitle.id)),
+  )
+  const activeTimelineId = timelineIds.has(prevState.editorModel.activeTimelineId ?? '')
+    ? prevState.editorModel.activeTimelineId
+    : (nextEditorModel.activeTimelineId ?? nextEditorModel.timelines[0]?.id ?? null)
+
+  const openTimelineIds = new Set(
+    Array.from(prevState.session.ui.openTimelineIds).filter(id => timelineIds.has(id)),
+  )
+  if (activeTimelineId) openTimelineIds.add(activeTimelineId)
+
+  return {
+    ...prevState,
+    editorModel: {
+      ...nextEditorModel,
+      activeTimelineId,
+    },
+    session: {
+      ...prevState.session,
+      selection: {
+        ...prevState.session.selection,
+        clipIds: new Set(Array.from(prevState.session.selection.clipIds).filter(id => clipIds.has(id))),
+        subtitleId: prevState.session.selection.subtitleId && subtitleIds.has(prevState.session.selection.subtitleId)
+          ? prevState.session.selection.subtitleId
+          : null,
+        editingSubtitleId: prevState.session.selection.editingSubtitleId
+          && subtitleIds.has(prevState.session.selection.editingSubtitleId)
+          ? prevState.session.selection.editingSubtitleId
+          : null,
+        gap: null,
+      },
+      transport: {
+        ...prevState.session.transport,
+        timelineInOutMap: Object.fromEntries(
+          Object.entries(prevState.session.transport.timelineInOutMap)
+            .filter(([timelineId]) => timelineIds.has(timelineId)),
+        ),
+      },
+      ui: {
+        ...prevState.session.ui,
+        openTimelineIds,
+        renamingTimelineId: prevState.session.ui.renamingTimelineId
+          && timelineIds.has(prevState.session.ui.renamingTimelineId)
+          ? prevState.session.ui.renamingTimelineId
+          : null,
+        subtitleTrackStyleIdx: (
+          prevState.session.ui.subtitleTrackStyleIdx !== null
+          && prevState.session.ui.subtitleTrackStyleIdx >= 0
+          && prevState.session.ui.subtitleTrackStyleIdx < (nextEditorModel.timelines.find(
+            timeline => timeline.id === activeTimelineId,
+          )?.tracks.length ?? 0)
+        )
+          ? prevState.session.ui.subtitleTrackStyleIdx
+          : null,
+      },
+    },
+    history: {
+      undoStack: [],
+      redoStack: [],
+    },
+    projectSync: {
+      ...prevState.projectSync,
+      dirty: false,
+    },
+  }
+}
+
 export function VideoEditor(props: VideoEditorProps) {
   const { currentProject, pendingRetakeUpdate, pendingIcLoraUpdate } = props
   const editorStoreRef = useRef<EditorStoreApi | null>(null)
@@ -102,6 +178,14 @@ export function VideoEditor(props: VideoEditorProps) {
 
   const editorStore = editorStoreRef.current
   if (!editorStore) throw new Error('Editor store failed to initialize')
+
+  useEffect(() => {
+    const currentState = editorStore.getState().state
+    const nextEditorModel = getEditorModel(currentProject)
+    if (areEditorModelsEquivalent(nextEditorModel, currentState.editorModel)) return
+
+    editorStore.getState().setStateWithoutHistory(prevState => syncEditorStateFromProject(prevState, nextEditorModel))
+  }, [currentProject, editorStore])
 
   return (
     <EditorStoreProvider store={editorStore}>

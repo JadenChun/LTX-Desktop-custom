@@ -46,6 +46,9 @@ import {
   selectTracks,
 } from './editor-selectors'
 import { getEditorModel, updatedProject } from './editor-project-bridging'
+import {
+  createSubtitleEntriesWithProgressiveStyle,
+} from './subtitle-progressive'
 
 export interface PendingClipTakeUpdate {
   assetId: string
@@ -196,6 +199,8 @@ function createTimelineClipFromAsset(asset: Asset, trackIndex: number, startTime
     flipV: false,
     transitionIn: { type: 'none', duration: 0 },
     transitionOut: { type: 'none', duration: 0 },
+    audioFadeInDuration: 0,
+    audioFadeOutDuration: 0,
     colorCorrection: { ...DEFAULT_COLOR_CORRECTION },
     opacity: 100,
   }
@@ -227,11 +232,33 @@ function buildDroppedAssetInsertion(
   }
 
   const createVideoClip = (isVideoAsset || isImageAsset || isAdjustment) && trackPatched
-  const needsAudioClip = isVideoAsset && !isAdjustment
+  const needsLinkedAudioClip = isVideoAsset && !isAdjustment
   let nextTracks = tracks
   let audioTrackIndex = -1
 
-  if (needsAudioClip) {
+  if (isAudioAsset) {
+    if (track.kind === 'audio' && !track.locked && track.sourcePatched !== false) {
+      audioTrackIndex = trackIndex
+    } else {
+      audioTrackIndex = nextTracks.findIndex(
+        candidate => candidate.kind === 'audio' && !candidate.locked && candidate.sourcePatched !== false,
+      )
+    }
+    if (audioTrackIndex < 0) {
+      const audioTrackCount = nextTracks.filter(candidate => candidate.kind === 'audio').length
+      nextTracks = [
+        ...nextTracks,
+        {
+          id: makeId('track-audio'),
+          name: `A${audioTrackCount + 1}`,
+          muted: false,
+          locked: false,
+          kind: 'audio',
+        },
+      ]
+      audioTrackIndex = nextTracks.length - 1
+    }
+  } else if (needsLinkedAudioClip) {
     audioTrackIndex = nextTracks.findIndex(
       (candidate, index) =>
         index > trackIndex &&
@@ -260,7 +287,7 @@ function buildDroppedAssetInsertion(
     }
   }
 
-  const createAudioClip = needsAudioClip && audioTrackIndex >= 0
+  const createAudioClip = (isAudioAsset || needsLinkedAudioClip) && audioTrackIndex >= 0
   if (!createVideoClip && !createAudioClip) {
     return { tracks: nextTracks, clips: [], duration: 0 }
   }
@@ -289,6 +316,8 @@ function buildDroppedAssetInsertion(
       flipV: false,
       transitionIn: { type: 'none', duration: isAdjustment ? 0 : 0.5 },
       transitionOut: { type: 'none', duration: isAdjustment ? 0 : 0.5 },
+      audioFadeInDuration: 0,
+      audioFadeOutDuration: 0,
       colorCorrection: { ...DEFAULT_COLOR_CORRECTION },
       opacity: 100,
       ...(isAdjustment ? { letterbox: { ...DEFAULT_LETTERBOX } } : {}),
@@ -313,11 +342,13 @@ function buildDroppedAssetInsertion(
       asset,
       flipH: false,
       flipV: false,
-      transitionIn: { type: 'none', duration: 0.5 },
-      transitionOut: { type: 'none', duration: 0.5 },
+      transitionIn: { type: 'none', duration: 0 },
+      transitionOut: { type: 'none', duration: 0 },
+      audioFadeInDuration: 0,
+      audioFadeOutDuration: 0,
       colorCorrection: { ...DEFAULT_COLOR_CORRECTION },
       opacity: 100,
-      ...(createVideoClip ? { linkedClipIds: [videoClipId] } : {}),
+      ...(needsLinkedAudioClip && createVideoClip ? { linkedClipIds: [videoClipId] } : {}),
     })
   }
 
@@ -347,6 +378,8 @@ function createTextClip(style?: Partial<TextOverlayStyle>, startTime = 0, trackI
     flipV: false,
     transitionIn: { type: 'none', duration: 0 },
     transitionOut: { type: 'none', duration: 0 },
+    audioFadeInDuration: 0,
+    audioFadeOutDuration: 0,
     colorCorrection: { ...DEFAULT_COLOR_CORRECTION },
     opacity: 100,
     textStyle: {
@@ -427,6 +460,8 @@ function buildSourceRequestClips(state: EditorState, params: SourceEditParams): 
     flipV: false as const,
     transitionIn: { type: 'none' as const, duration: 0.5 },
     transitionOut: { type: 'none' as const, duration: 0.5 },
+    audioFadeInDuration: 0,
+    audioFadeOutDuration: 0,
     colorCorrection: { ...DEFAULT_COLOR_CORRECTION },
     opacity: 100,
   }
@@ -723,6 +758,8 @@ export function importParsedTimeline(state: EditorState, parsed: ParsedTimeline)
       flipV: parsedClip.flipV || false,
       transitionIn: { type: 'none', duration: 0 },
       transitionOut: { type: 'none', duration: 0 },
+      audioFadeInDuration: 0,
+      audioFadeOutDuration: 0,
       colorCorrection: { ...DEFAULT_COLOR_CORRECTION },
       opacity: parsedClip.opacity !== undefined ? parsedClip.opacity : 100,
     })
@@ -1354,14 +1391,19 @@ export function importSrtCues(state: EditorState, cues: SrtCue[]): EditorState {
     subtitleTrackIndex = 0
   }
 
-  const importedSubtitles: SubtitleClip[] = cues.map(cue => ({
-    id: `${makeId('sub')}-${cue.index}`,
-    text: cue.text,
-    startTime: cue.startTime,
-    endTime: cue.endTime,
-    trackIndex: subtitleTrackIndex,
-    ...(cue.color ? { style: { color: cue.color } } : {}),
-  }))
+  const subtitleTrack = selectTracks(next)[subtitleTrackIndex]
+  const importedSubtitles = cues.flatMap(cue => createSubtitleEntriesWithProgressiveStyle(
+    {
+      id: `${makeId('sub')}-${cue.index}`,
+      text: cue.text,
+      startTime: cue.startTime,
+      endTime: cue.endTime,
+      trackIndex: subtitleTrackIndex,
+      ...(cue.color ? { style: { color: cue.color } } : {}),
+    },
+    subtitleTrack?.subtitleStyle,
+    makeId,
+  ))
 
   return setTimelineSubtitles(next, prev => [
     ...prev.filter(subtitle => subtitle.trackIndex !== subtitleTrackIndex),
@@ -1385,9 +1427,11 @@ export function addSubtitle(state: EditorState, params: AddSubtitleParams): Edit
     endTime: params.endTime ?? (selectCurrentTime(state) + 3),
     trackIndex: params.trackIndex,
   }
+  const trackStyle = selectTracks(state)[params.trackIndex]?.subtitleStyle
+  const nextSubtitles = createSubtitleEntriesWithProgressiveStyle(subtitle, trackStyle, makeId)
   return replaceActiveTimeline(state, timeline => ({
     ...timeline,
-    subtitles: [...(timeline.subtitles || []), subtitle],
+    subtitles: [...(timeline.subtitles || []), ...nextSubtitles],
   }))
 }
 
@@ -1443,6 +1487,33 @@ export function setSubtitleStyleField<K extends keyof SubtitleStyle>(
   })
 }
 
+/**
+ * Split a single subtitle into progressive chunks (e.g. 4 words each).
+ * Each chunk gets a proportional time slice of the original subtitle's duration,
+ * so text appears progressively as the voiceover plays — like TikTok/Reels captions.
+ */
+export function splitSubtitleProgressive(
+  state: EditorState,
+  subtitleId: string,
+): EditorState {
+  return replaceActiveTimeline(state, timeline => {
+    const subtitles = timeline.subtitles || []
+    const idx = subtitles.findIndex(s => s.id === subtitleId)
+    if (idx === -1) return timeline
+
+    const sub = subtitles[idx]
+    const trackStyle = timeline.tracks[sub.trackIndex]?.subtitleStyle
+    const newSubs = createSubtitleEntriesWithProgressiveStyle(sub, trackStyle, makeId, true)
+
+    const nextSubtitles = [
+      ...subtitles.slice(0, idx),
+      ...newSubs,
+      ...subtitles.slice(idx + 1),
+    ]
+    return { ...timeline, subtitles: nextSubtitles }
+  })
+}
+
 export function addAssetToEditor(state: EditorState, asset: Asset): EditorState {
   return updateEditorModel(state, editorModel => ({
     ...editorModel,
@@ -1492,6 +1563,8 @@ export function insertGeneratedGapAsset(state: EditorState, params: InsertGenera
     flipV: false,
     transitionIn: { type: 'none', duration: 0 },
     transitionOut: { type: 'none', duration: 0 },
+    audioFadeInDuration: 0,
+    audioFadeOutDuration: 0,
     colorCorrection: { ...DEFAULT_COLOR_CORRECTION },
     opacity: 100,
     ...(params.createAudio && audioTrackIndex >= 0 ? { linkedClipIds: [audioClipId] } : {}),
@@ -1516,6 +1589,8 @@ export function insertGeneratedGapAsset(state: EditorState, params: InsertGenera
       flipV: false,
       transitionIn: { type: 'none', duration: 0 },
       transitionOut: { type: 'none', duration: 0 },
+      audioFadeInDuration: 0,
+      audioFadeOutDuration: 0,
       colorCorrection: { ...DEFAULT_COLOR_CORRECTION },
       opacity: 100,
       linkedClipIds: [videoClipId],
