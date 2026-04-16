@@ -1,9 +1,11 @@
 import { useState } from 'react'
-import { Plus, Folder, MoreVertical, Trash2, Pencil, Settings } from 'lucide-react'
+import { Plus, Folder, MoreVertical, Trash2, Pencil, Settings, Wifi } from 'lucide-react'
 import { useProjects } from '../contexts/ProjectContext'
 import { LtxLogo } from '../components/LtxLogo'
 import { Button } from '../components/ui/button'
 import { pathToFileUrl } from '../lib/file-url'
+import { useLanSync, type LanSyncPeer } from '../hooks/use-lan-sync'
+import { LanSyncModal } from '../components/LanSyncModal'
 import type { Project } from '../types/project'
 
 function formatDate(timestamp: number): string {
@@ -122,6 +124,8 @@ function ProjectCard({ project, onOpen, onDelete, onRename }: {
 
 export function Home() {
   const { projects, createProject, deleteProject, renameProject, openProject } = useProjects()
+  const { peers, enabled } = useLanSync()
+  const [selectedPeer, setSelectedPeer] = useState<LanSyncPeer | null>(null)
   const [isCreating, setIsCreating] = useState(false)
   const [newProjectName, setNewProjectName] = useState('')
   const [renamingId, setRenamingId] = useState<string | null>(null)
@@ -182,6 +186,32 @@ export function Home() {
                   <span className="truncate">{project.name}</span>
                 </button>
               ))}
+            </div>
+          )}
+
+          {enabled && (
+            <div className="mt-6">
+              <h4 className="px-3 text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                <Wifi className="h-3 w-3" />
+                Nearby Devices
+              </h4>
+              {peers.length === 0 ? (
+                <p className="px-3 text-xs text-zinc-600 flex items-center gap-1.5">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-zinc-600 animate-pulse" />
+                  Looking for devices...
+                </p>
+              ) : (
+                peers.map(peer => (
+                  <button
+                    key={peer.id}
+                    onClick={() => setSelectedPeer(peer)}
+                    className="w-full px-3 py-2 rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white text-left text-sm flex items-center gap-2 transition-colors"
+                  >
+                    <Wifi className="h-4 w-4 flex-shrink-0 text-blue-400" />
+                    <span className="truncate">{peer.deviceName}</span>
+                  </button>
+                ))
+              )}
             </div>
           )}
         </nav>
@@ -297,6 +327,14 @@ export function Home() {
         </div>
       )}
       
+      {/* LAN Sync Modal */}
+      {selectedPeer && (
+        <LanSyncModal
+          peer={selectedPeer}
+          onClose={() => setSelectedPeer(null)}
+        />
+      )}
+
       {/* Rename Modal */}
       {renamingId && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">

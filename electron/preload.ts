@@ -1,4 +1,4 @@
-import { electronAPISchemas, type BackendHealthStatus } from '../shared/electron-api-schema'
+import { electronAPISchemas, type BackendHealthStatus, type LanSyncPeer, type LanSyncProgressEvent, type LanSyncIncomingRequest } from '../shared/electron-api-schema'
 
 const { contextBridge, ipcRenderer, webUtils } = require('electron')
 
@@ -38,6 +38,24 @@ api.onExportProgress = (cb: (percent: number) => void) => {
 
 api.removeExportProgress = () => {
   ipcRenderer.removeAllListeners('export-progress')
+}
+
+api.onLanSyncPeersChanged = (cb: (peers: LanSyncPeer[]) => void) => {
+  const listener = (_: unknown, data: LanSyncPeer[]) => cb(data)
+  ipcRenderer.on('lan-sync-peers-changed', listener)
+  return () => { ipcRenderer.removeListener('lan-sync-peers-changed', listener) }
+}
+
+api.onLanSyncProgress = (cb: (event: LanSyncProgressEvent) => void) => {
+  const listener = (_: unknown, data: LanSyncProgressEvent) => cb(data)
+  ipcRenderer.on('lan-sync-progress', listener)
+  return () => { ipcRenderer.removeListener('lan-sync-progress', listener) }
+}
+
+api.onLanSyncIncomingRequest = (cb: (event: LanSyncIncomingRequest) => void) => {
+  const listener = (_: unknown, data: LanSyncIncomingRequest) => cb(data)
+  ipcRenderer.on('lan-sync-incoming-request', listener)
+  return () => { ipcRenderer.removeListener('lan-sync-incoming-request', listener) }
 }
 
 api.getPathForFile = (file: File) => webUtils.getPathForFile(file)

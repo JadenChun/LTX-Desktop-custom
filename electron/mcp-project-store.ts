@@ -105,7 +105,7 @@ function takeSnapshot(): Map<string, number> {
   return snapshot
 }
 
-function broadcast(change: McpProjectChangeEvent): void {
+export function broadcast(change: McpProjectChangeEvent): void {
   for (const window of BrowserWindow.getAllWindows()) {
     window.webContents.send(MCP_PROJECT_CHANGED_CHANNEL, change)
   }

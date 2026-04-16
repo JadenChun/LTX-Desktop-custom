@@ -400,6 +400,32 @@ export const electronAPISchemas = {
     input: z.object({ eventName: z.string(), extraDetails: z.record(z.string(), z.unknown()).nullable().optional() }),
     output: z.void(),
   },
+
+  // LAN Sync
+  lanSyncGetStatus: {
+    input: z.object({}),
+    output: z.object({ enabled: z.boolean(), deviceName: z.string(), port: z.number().nullable() }),
+  },
+  lanSyncSetEnabled: {
+    input: z.object({ enabled: z.boolean() }),
+    output: z.void(),
+  },
+  lanSyncListRemoteProjects: {
+    input: z.object({ peerId: z.string() }),
+    output: z.array(mcpProjectSummary),
+  },
+  lanSyncStartTransfer: {
+    input: z.object({ peerId: z.string(), projectId: z.string(), newProjectId: z.string().optional(), newProjectName: z.string().optional() }),
+    output: ipcResult({ transferId: z.string() }),
+  },
+  lanSyncCancelTransfer: {
+    input: z.object({ transferId: z.string() }),
+    output: z.void(),
+  },
+  lanSyncApproveIncoming: {
+    input: z.object({ transferId: z.string(), approved: z.boolean() }),
+    output: z.void(),
+  },
 } as const
 
 type Schemas = typeof electronAPISchemas
@@ -410,6 +436,31 @@ type InvokeAPI = {
     : (input: z.infer<Schemas[K]['input']>) => Promise<z.infer<Schemas[K]['output']>>
 }
 
+export interface LanSyncPeer {
+  id: string
+  deviceName: string
+  address: string
+  port: number
+  lastSeen: number
+  token: string
+}
+
+export interface LanSyncProgressEvent {
+  transferId: string
+  phase: 'downloading' | 'extracting' | 'complete' | 'error'
+  bytesReceived: number
+  totalBytes: number
+  errorMessage?: string
+}
+
+export interface LanSyncIncomingRequest {
+  transferId: string
+  fromDeviceName: string
+  projectId: string
+  projectName: string
+  estimatedBytes: number
+}
+
 export type ElectronAPI = InvokeAPI & {
   onPythonSetupProgress: (cb: (data: unknown) => void) => void
   removePythonSetupProgress: () => void
@@ -417,6 +468,9 @@ export type ElectronAPI = InvokeAPI & {
   onMcpProjectChanged: (cb: (event: McpProjectChangeEvent) => void) => (() => void)
   onExportProgress: (cb: (percent: number) => void) => void
   removeExportProgress: () => void
+  onLanSyncPeersChanged: (cb: (peers: LanSyncPeer[]) => void) => (() => void)
+  onLanSyncProgress: (cb: (event: LanSyncProgressEvent) => void) => (() => void)
+  onLanSyncIncomingRequest: (cb: (event: LanSyncIncomingRequest) => void) => (() => void)
   getPathForFile: (file: File) => string
   platform: string
 }

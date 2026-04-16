@@ -36,6 +36,7 @@
     "start:unpacked:win": "powershell -Command \"& '.\\release\\win-unpacked\\LTX Desktop.exe'\""
   },
   "dependencies": {
+    "archiver": "7.0.1",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
     "electron-updater": "^6.8.3",
@@ -50,6 +51,7 @@
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
+    "@types/archiver": "7.0.0",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.7.7",
     "@types/react": "^18.3.3",

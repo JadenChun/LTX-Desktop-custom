@@ -10,6 +10,8 @@ import { registerFileHandlers } from './ipc/file-handlers'
 import { registerLogHandlers } from './ipc/log-handlers'
 import { registerMcpProjectHandlers } from './ipc/mcp-project-handlers'
 import { registerVideoProcessingHandlers } from './ipc/video-processing-handlers'
+import { registerLanSyncHandlers } from './ipc/lan-sync-handlers'
+import { startLanSync, stopLanSync } from './lan-sync/lan-sync-service'
 import { initSessionLog } from './logging-management'
 import { startMcpProjectWatcher, stopMcpProjectWatcher } from './mcp-project-store'
 import { ensurePreviewBridgeServer, stopPreviewBridgeServer } from './preview/preview-service'
@@ -55,6 +57,7 @@ if (isMcpStdioCliInvocation(process.argv)) {
     registerMcpProjectHandlers()
     registerExportHandlers()
     registerVideoProcessingHandlers()
+    registerLanSyncHandlers()
 
     app.on('second-instance', () => {
       const mainWindow = getMainWindow()
@@ -77,6 +80,7 @@ if (isMcpStdioCliInvocation(process.argv)) {
       setupCSP()
       await ensurePreviewBridgeServer()
       startMcpProjectWatcher()
+      void startLanSync()
       // Ensure outputs directory exists for imported media files
       const outputsDir = path.join(process.cwd(), 'outputs')
       if (!fs.existsSync(outputsDir)) {
@@ -106,6 +110,7 @@ if (isMcpStdioCliInvocation(process.argv)) {
 
     app.on('before-quit', () => {
       stopMcpProjectWatcher()
+      stopLanSync()
       stopExportProcess()
       stopPythonBackend()
       void stopPreviewBridgeServer()

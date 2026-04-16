@@ -15,6 +15,7 @@ import { PythonSetup } from './components/PythonSetup'
 import { SettingsModal, type SettingsTabId } from './components/SettingsModal'
 import { LogViewer } from './components/LogViewer'
 import { ApiGatewayModal, type ApiGatewaySection } from './components/ApiGatewayModal'
+import { LanSyncIncomingDialog } from './components/LanSyncIncomingDialog'
 import { Button } from './components/ui/button'
 
 type SetupState = 'loading' | { needsSetup: boolean; needsLicense: boolean }
@@ -488,6 +489,7 @@ function AppContent() {
         </div>
       )}
 
+      <LanSyncIncomingDialog />
       {restartingOverlay}
     </div>
   )
