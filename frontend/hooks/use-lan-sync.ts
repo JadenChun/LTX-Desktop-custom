@@ -67,5 +67,9 @@ export function useLanSync() {
     window.electronAPI.lanSyncCancelTransfer({ transferId }).catch(() => {})
   }, [])
 
-  return { peers, enabled, activeTransfers, toggleEnabled, listRemoteProjects, startTransfer, cancelTransfer }
+  const refresh = useCallback(() => {
+    window.electronAPI.lanSyncRefresh().catch(() => {})
+  }, [])
+
+  return { peers, enabled, activeTransfers, toggleEnabled, listRemoteProjects, startTransfer, cancelTransfer, refresh }
 }

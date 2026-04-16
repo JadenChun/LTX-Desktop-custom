@@ -202,7 +202,7 @@ function startUdpSocket(): Promise<void> {
       logger.error(`[LAN Sync] UDP error: ${err.message}`)
     })
 
-    socket.on('message', (msg) => {
+    socket.on('message', (msg, rinfo) => {
       try {
         const data = JSON.parse(msg.toString()) as Record<string, unknown>
         if (data.type !== 'ltx-announce') return
@@ -212,7 +212,7 @@ function startUdpSocket(): Promise<void> {
         const peer: LanSyncPeer = {
           id: peerId,
           deviceName: (data.deviceName as string) ?? 'Unknown',
-          address: (data.address as string) ?? getLocalIp(),
+          address: rinfo.address, // use actual source IP, not beacon payload
           port: data.port as number,
           lastSeen: Date.now(),
           token: data.token as string,
@@ -283,6 +283,13 @@ export function setLanSyncEnabled(value: boolean): void {
 
 export function getKnownPeers(): LanSyncPeer[] {
   return Array.from(peers.values())
+}
+
+export function refreshDiscovery(): void {
+  // Clear stale peers immediately and re-announce so both sides rediscover each other
+  peers.clear()
+  broadcastPeersChanged()
+  sendBeacon()
 }
 
 export function approveIncomingTransfer(transferId: string, approved: boolean): void {

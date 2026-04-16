@@ -426,6 +426,10 @@ export const electronAPISchemas = {
     input: z.object({ transferId: z.string(), approved: z.boolean() }),
     output: z.void(),
   },
+  lanSyncRefresh: {
+    input: z.object({}),
+    output: z.void(),
+  },
 } as const
 
 type Schemas = typeof electronAPISchemas

@@ -4,6 +4,7 @@ import {
   setLanSyncEnabled,
   getKnownPeers,
   approveIncomingTransfer,
+  refreshDiscovery,
 } from '../lan-sync/lan-sync-service'
 import { downloadProject, cancelTransfer } from '../lan-sync/transfer-manager'
 
@@ -43,5 +44,9 @@ export function registerLanSyncHandlers(): void {
 
   handle('lanSyncApproveIncoming', ({ transferId, approved }) => {
     approveIncomingTransfer(transferId, approved)
+  })
+
+  handle('lanSyncRefresh', () => {
+    refreshDiscovery()
   })
 }

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, Folder, MoreVertical, Trash2, Pencil, Settings, Wifi } from 'lucide-react'
+import { Plus, Folder, MoreVertical, Trash2, Pencil, Settings, Wifi, RefreshCw } from 'lucide-react'
 import { useProjects } from '../contexts/ProjectContext'
 import { LtxLogo } from '../components/LtxLogo'
 import { Button } from '../components/ui/button'
@@ -124,7 +124,7 @@ function ProjectCard({ project, onOpen, onDelete, onRename }: {
 
 export function Home() {
   const { projects, createProject, deleteProject, renameProject, openProject } = useProjects()
-  const { peers, enabled } = useLanSync()
+  const { peers, enabled, refresh } = useLanSync()
   const [selectedPeer, setSelectedPeer] = useState<LanSyncPeer | null>(null)
   const [isCreating, setIsCreating] = useState(false)
   const [newProjectName, setNewProjectName] = useState('')
@@ -190,10 +190,21 @@ export function Home() {
           )}
 
           <div className="mt-6">
-            <h4 className="px-3 text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-              <Wifi className="h-3 w-3" />
-              Nearby Devices
-            </h4>
+            <div className="px-3 mb-2 flex items-center justify-between">
+              <h4 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider flex items-center gap-1.5">
+                <Wifi className="h-3 w-3" />
+                Nearby Devices
+              </h4>
+              {enabled && (
+                <button
+                  onClick={refresh}
+                  title="Refresh nearby devices"
+                  className="text-zinc-600 hover:text-zinc-400 transition-colors"
+                >
+                  <RefreshCw className="h-3 w-3" />
+                </button>
+              )}
+            </div>
             {!enabled ? (
               <p className="px-3 text-xs text-zinc-600">Disabled in Settings</p>
             ) : peers.length === 0 ? (
