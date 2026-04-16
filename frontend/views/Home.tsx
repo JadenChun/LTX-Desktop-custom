@@ -189,31 +189,31 @@ export function Home() {
             </div>
           )}
 
-          {enabled && (
-            <div className="mt-6">
-              <h4 className="px-3 text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                <Wifi className="h-3 w-3" />
-                Nearby Devices
-              </h4>
-              {peers.length === 0 ? (
-                <p className="px-3 text-xs text-zinc-600 flex items-center gap-1.5">
-                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-zinc-600 animate-pulse" />
-                  Looking for devices...
-                </p>
-              ) : (
-                peers.map(peer => (
-                  <button
-                    key={peer.id}
-                    onClick={() => setSelectedPeer(peer)}
-                    className="w-full px-3 py-2 rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white text-left text-sm flex items-center gap-2 transition-colors"
-                  >
-                    <Wifi className="h-4 w-4 flex-shrink-0 text-blue-400" />
-                    <span className="truncate">{peer.deviceName}</span>
-                  </button>
-                ))
-              )}
-            </div>
-          )}
+          <div className="mt-6">
+            <h4 className="px-3 text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+              <Wifi className="h-3 w-3" />
+              Nearby Devices
+            </h4>
+            {!enabled ? (
+              <p className="px-3 text-xs text-zinc-600">Disabled in Settings</p>
+            ) : peers.length === 0 ? (
+              <p className="px-3 text-xs text-zinc-500 flex items-center gap-1.5">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-zinc-500 animate-pulse flex-shrink-0" />
+                Looking for devices...
+              </p>
+            ) : (
+              peers.map(peer => (
+                <button
+                  key={peer.id}
+                  onClick={() => setSelectedPeer(peer)}
+                  className="w-full px-3 py-2 rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white text-left text-sm flex items-center gap-2 transition-colors"
+                >
+                  <Wifi className="h-4 w-4 flex-shrink-0 text-blue-400" />
+                  <span className="truncate">{peer.deviceName}</span>
+                </button>
+              ))
+            )}
+          </div>
         </nav>
         
         <div className="p-4 border-t border-zinc-800 space-y-2">

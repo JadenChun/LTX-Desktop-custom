@@ -365,6 +365,34 @@ export function SettingsModal({
         <div className="px-6 py-5 space-y-6 h-[60vh] overflow-y-auto">
           {activeTab === 'general' && (
             <>
+              {/* LAN Sync — shown first so it's immediately visible */}
+              <div className="space-y-3">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Wifi className="h-4 w-4 text-blue-400" />
+                      <label className="text-sm font-medium text-white">LAN Sync</label>
+                    </div>
+                    <p className="text-xs text-zinc-500 leading-relaxed">
+                      Make this device discoverable to other LTX Desktop instances on the same WiFi
+                      network. Both devices must approve each transfer.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => toggleLanSync(!lanSyncEnabled)}
+                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                      lanSyncEnabled ? 'bg-blue-500' : 'bg-zinc-700'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                        lanSyncEnabled ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+
               {showProjectSettings && (
                 <div className="space-y-3">
                   <div className="flex items-center gap-2">
@@ -629,41 +657,6 @@ export function SettingsModal({
                     settings.loadOnStartup ? 'bg-blue-400' : 'bg-zinc-600'
                   }`} />
                   {settings.loadOnStartup ? 'Models preload in background at startup' : 'Models load on first generation'}
-                </div>
-              </div>
-
-              {/* LAN Sync Setting */}
-              <div className="space-y-3 pt-4 border-t border-zinc-800">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <Wifi className="h-4 w-4 text-blue-400" />
-                      <label className="text-sm font-medium text-white">LAN Sync</label>
-                    </div>
-                    <p className="text-xs text-zinc-500 leading-relaxed">
-                      Make this device discoverable to other LTX Desktop instances on the same WiFi
-                      network. Project names are visible to nearby devices while enabled. Both devices
-                      must approve each transfer.
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => toggleLanSync(!lanSyncEnabled)}
-                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                      lanSyncEnabled ? 'bg-blue-500' : 'bg-zinc-700'
-                    }`}
-                  >
-                    <span
-                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                        lanSyncEnabled ? 'translate-x-5' : 'translate-x-0'
-                      }`}
-                    />
-                  </button>
-                </div>
-                <div className={`text-xs px-2 py-1 rounded inline-flex items-center gap-1.5 ${
-                  lanSyncEnabled ? 'bg-blue-500/10 text-blue-400' : 'bg-zinc-800 text-zinc-500'
-                }`}>
-                  <div className={`w-1.5 h-1.5 rounded-full ${lanSyncEnabled ? 'bg-blue-400' : 'bg-zinc-600'}`} />
-                  {lanSyncEnabled ? 'Visible to devices on the same WiFi' : 'Device not discoverable'}
                 </div>
               </div>
 
