@@ -55,6 +55,10 @@ export function registerLanSyncHandlers(): void {
     refreshDiscovery()
   })
 
+  handle('lanSyncGetPeers', () => {
+    return getKnownPeers()
+  })
+
   handle('lanSyncPair', async ({ peerId }) => {
     const result = await pairWithPeer(peerId)
     if (!result.ok) return { success: false as const, error: result.error }

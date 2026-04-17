@@ -430,6 +430,17 @@ export const electronAPISchemas = {
     input: z.object({}),
     output: z.void(),
   },
+  lanSyncGetPeers: {
+    input: z.object({}),
+    output: z.array(z.object({
+      id: z.string(),
+      deviceName: z.string(),
+      address: z.string(),
+      port: z.number(),
+      lastSeen: z.number(),
+      token: z.string(),
+    })),
+  },
   lanSyncPair: {
     input: z.object({ peerId: z.string() }),
     output: ipcResult({ deviceId: z.string(), deviceName: z.string() }),

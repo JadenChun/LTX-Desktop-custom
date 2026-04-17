@@ -557,9 +557,8 @@ export function getKnownPeers(): LanSyncPeer[] {
 }
 
 export function refreshDiscovery(): void {
-  // Clear stale peers immediately and re-announce so both sides rediscover each other
-  peers.clear()
-  broadcastPeersChanged()
+  // Re-announce so remote peers re-discover us. Keep existing peers visible while
+  // waiting for responses; eviction will handle truly-gone devices in ~12 seconds.
   sendBeacon()
 }
 

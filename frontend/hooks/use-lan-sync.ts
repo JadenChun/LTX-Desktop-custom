@@ -24,6 +24,10 @@ export function useLanSync() {
       setPairedDevices(list)
     }).catch(() => {})
 
+    window.electronAPI.lanSyncGetPeers().then(list => {
+      setPeers(list)
+    }).catch(() => {})
+
     const unsubPeers = window.electronAPI.onLanSyncPeersChanged(newPeers => {
       setPeers(newPeers)
     })
