@@ -2,6 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { getProjectAssetsPath } from '../app-state'
 import { approvePath } from '../path-validation'
+import { mapProjectPaths } from './project-paths'
 
 // ── Path restoration ──────────────────────────────────────────────────────────
 
@@ -13,62 +14,14 @@ export function absolutizeProjectPaths(
   project: Record<string, unknown>,
   assetsRoot: string,
 ): Record<string, unknown> {
-  function abs(p: unknown): unknown {
+  return mapProjectPaths(project, (p: unknown): unknown => {
     if (typeof p !== 'string' || !p) return p
     if (p.startsWith('assets/')) {
       const segments = p.slice('assets/'.length).split('/')
       return path.join(assetsRoot, ...segments)
     }
     return p
-  }
-
-  function transformAsset(asset: unknown): unknown {
-    if (!asset || typeof asset !== 'object' || Array.isArray(asset)) return asset
-    const a = asset as Record<string, unknown>
-    return {
-      ...a,
-      path: abs(a['path']),
-      bigThumbnailPath: abs(a['bigThumbnailPath']),
-      smallThumbnailPath: abs(a['smallThumbnailPath']),
-      thumbnail: abs(a['thumbnail']),
-      takes: Array.isArray(a['takes'])
-        ? a['takes'].map((take) => {
-            const t = take as Record<string, unknown>
-            return {
-              ...t,
-              path: abs(t['path']),
-              bigThumbnailPath: abs(t['bigThumbnailPath']),
-              smallThumbnailPath: abs(t['smallThumbnailPath']),
-              thumbnail: abs(t['thumbnail']),
-            }
-          })
-        : a['takes'],
-    }
-  }
-
-  function transformTimelines(timelines: unknown): unknown {
-    if (!Array.isArray(timelines)) return timelines
-    return timelines.map((timeline) => {
-      if (!timeline || typeof timeline !== 'object') return timeline
-      const tl = timeline as Record<string, unknown>
-      return {
-        ...tl,
-        clips: Array.isArray(tl['clips'])
-          ? tl['clips'].map((clip) => {
-              if (!clip || typeof clip !== 'object') return clip
-              const c = clip as Record<string, unknown>
-              return { ...c, asset: c['asset'] ? transformAsset(c['asset']) : c['asset'] }
-            })
-          : tl['clips'],
-      }
-    })
-  }
-
-  return {
-    ...project,
-    assets: Array.isArray(project['assets']) ? project['assets'].map(transformAsset) : project['assets'],
-    timelines: transformTimelines(project['timelines']),
-  }
+  })
 }
 
 // ── Install ───────────────────────────────────────────────────────────────────

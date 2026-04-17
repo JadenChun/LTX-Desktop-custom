@@ -86,8 +86,8 @@ function ProjectCard({ project, onOpen, onDelete, onRename }: {
         <p className="text-xs text-zinc-500 mt-1">{formatDate(project.updatedAt)}</p>
       </div>
       
-      {/* Sync toggle (only when at least one paired device exists) */}
-      <div className="absolute top-2 left-2 opacity-0 group-hover:opacity-100 transition-opacity">
+      {/* Sync toggle — always visible when paired devices exist */}
+      <div className="absolute top-2 left-2">
         <ProjectSyncToggle projectId={project.id} syncedWith={project.syncedWith} />
       </div>
 

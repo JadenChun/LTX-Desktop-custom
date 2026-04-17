@@ -76,7 +76,7 @@ function handleLocalChange(event: McpProjectChangeEvent): void {
   }
 }
 
-/** Pull if the incoming notify is newer than our copy. */
+/** Pull if the incoming notify is newer than our copy (or forced). */
 function handleIncomingNotify(event: SyncNotifyEvent): void {
   const peer = getOnlinePeerForPaired(event.fromDeviceId)
   if (!peer) {
@@ -85,12 +85,12 @@ function handleIncomingNotify(event: SyncNotifyEvent): void {
   }
 
   const localUpdatedAt = getLocalUpdatedAt(event.projectId)
-  if (event.updatedAt <= localUpdatedAt) {
+  if (!event.forceFullSync && event.updatedAt <= localUpdatedAt) {
     // We already have the same or newer. Nothing to do.
     return
   }
 
-  logger.info(`[sync-coordinator] pulling ${event.projectId} from ${event.fromDeviceId} (remote=${event.updatedAt} > local=${localUpdatedAt})`)
+  logger.info(`[sync-coordinator] pulling ${event.projectId} from ${event.fromDeviceId} (remote=${event.updatedAt}, local=${localUpdatedAt}, force=${event.forceFullSync ?? false})`)
   try {
     downloadProject(peer, event.projectId, { triggerReason: 'push' })
   } catch (err) {
@@ -164,11 +164,21 @@ export function setProjectSyncEnabled(projectId: string, enabled: boolean): { ok
     return { ok: false, error: `status=${result.status}` }
   }
 
-  // putMcpProject suppresses its own watcher-originated broadcast via
-  // ignoredWrites, so emit manually. source='local' so the coordinator
-  // picks it up and fans out to paired peers.
+  // putMcpProject suppresses its own watcher-originated broadcast via ignoredWrites,
+  // so emit manually. Use source='remote-sync' so handleLocalChange doesn't send a
+  // second (regular) notify — we send the force-push notifies directly below.
   const updatedAtRaw = result.project ? result.project['updatedAt'] : undefined
   const updatedAt = typeof updatedAtRaw === 'number' ? updatedAtRaw : Date.now()
-  broadcast({ kind: 'updated', projectId, updatedAt, source: 'local' })
+  broadcast({ kind: 'updated', projectId, updatedAt, source: 'remote-sync' })
+
+  // When enabling sync, force-push to every online paired peer so the receiver
+  // pulls regardless of its local updatedAt (fixes first-sync after pairing).
+  if (enabled) {
+    for (const targetDeviceId of targets) {
+      void sendSyncNotify(targetDeviceId, projectId, updatedAt, true).catch((err) => {
+        logger.warn(`[sync-coordinator] force-notify ${targetDeviceId} failed: ${err}`)
+      })
+    }
+  }
   return { ok: true }
 }

@@ -1,14 +1,17 @@
+import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
 import { getProjectAssetsPath } from '../app-state'
-import { getMcpProject } from '../mcp-project-store'
+import { getMcpProject, putMcpProject } from '../mcp-project-store'
+import { logger } from '../logger'
+import { mapProjectPaths } from './project-paths'
 
 // ── Path collection ───────────────────────────────────────────────────────────
 
 /**
  * Collect all unique absolute file paths referenced by the project.
- * Returns { absolutePath, relativePath } pairs for files under assetsRoot.
- * Files outside assetsRoot are returned with a null relativePath (cannot be transferred).
+ * Returns { absolutePath, relativePath } pairs — files inside assetsRoot get a
+ * relative "assets/..." path; files outside return relativePath: null.
  */
 export function collectProjectFilePaths(
   project: Record<string, unknown>,
@@ -16,61 +19,25 @@ export function collectProjectFilePaths(
 ): Array<{ absolutePath: string; relativePath: string | null }> {
   const seen = new Set<string>()
   const results: Array<{ absolutePath: string; relativePath: string | null }> = []
+  const normalizedRoot = assetsRoot.endsWith(path.sep) ? assetsRoot : assetsRoot + path.sep
 
-  function addPath(p: unknown): void {
-    if (typeof p !== 'string' || !p) return
+  mapProjectPaths(project, (p: unknown): unknown => {
+    if (typeof p !== 'string' || !p) return p
     const lower = p.toLowerCase()
-    if (lower.startsWith('http') || lower.startsWith('blob:') || lower.startsWith('data:')) return
+    if (lower.startsWith('http') || lower.startsWith('blob:') || lower.startsWith('data:')) return p
     const resolved = lower.startsWith('file://') ? new URL(p).pathname : p
-    if (seen.has(resolved)) return
+    if (seen.has(resolved)) return p
     seen.add(resolved)
+    if (!fs.existsSync(resolved)) return p
 
-    if (!fs.existsSync(resolved)) return
-
-    const normalizedRoot = assetsRoot.endsWith(path.sep) ? assetsRoot : assetsRoot + path.sep
     if (resolved.startsWith(normalizedRoot) || resolved === assetsRoot) {
       const rel = 'assets/' + path.relative(assetsRoot, resolved).split(path.sep).join('/')
       results.push({ absolutePath: resolved, relativePath: rel })
     } else {
       results.push({ absolutePath: resolved, relativePath: null })
     }
-  }
-
-  function walkAsset(asset: unknown): void {
-    if (!asset || typeof asset !== 'object' || Array.isArray(asset)) return
-    const a = asset as Record<string, unknown>
-    addPath(a['path'])
-    addPath(a['bigThumbnailPath'])
-    addPath(a['smallThumbnailPath'])
-    addPath(a['thumbnail'])
-    if (Array.isArray(a['takes'])) {
-      for (const take of a['takes']) {
-        const t = take as Record<string, unknown>
-        addPath(t['path'])
-        addPath(t['bigThumbnailPath'])
-        addPath(t['smallThumbnailPath'])
-        addPath(t['thumbnail'])
-      }
-    }
-  }
-
-  if (Array.isArray(project['assets'])) {
-    for (const asset of project['assets']) walkAsset(asset)
-  }
-
-  if (Array.isArray(project['timelines'])) {
-    for (const timeline of project['timelines']) {
-      if (!timeline || typeof timeline !== 'object') continue
-      const tl = timeline as Record<string, unknown>
-      if (Array.isArray(tl['clips'])) {
-        for (const clip of tl['clips']) {
-          if (!clip || typeof clip !== 'object') continue
-          const c = clip as Record<string, unknown>
-          if (c['asset']) walkAsset(c['asset'])
-        }
-      }
-    }
-  }
+    return p
+  })
 
   return results
 }
@@ -78,8 +45,8 @@ export function collectProjectFilePaths(
 // ── Path rewriting ────────────────────────────────────────────────────────────
 
 /**
- * Deep-clone the project JSON, replacing every absolute path that starts with
- * assetsRoot with a relative "assets/..." path.
+ * Deep-clone the project JSON, replacing every absolute path under assetsRoot
+ * with a portable "assets/..." relative path.
  */
 export function relativizeProjectPaths(
   project: Record<string, unknown>,
@@ -87,7 +54,7 @@ export function relativizeProjectPaths(
 ): Record<string, unknown> {
   const normalizedRoot = assetsRoot.endsWith(path.sep) ? assetsRoot : assetsRoot + path.sep
 
-  function rel(p: unknown): unknown {
+  return mapProjectPaths(project, (p: unknown): unknown => {
     if (typeof p !== 'string' || !p) return p
     const lower = p.toLowerCase()
     if (lower.startsWith('http') || lower.startsWith('blob:') || lower.startsWith('data:')) return p
@@ -96,54 +63,54 @@ export function relativizeProjectPaths(
       return 'assets/' + path.relative(assetsRoot, resolved).split(path.sep).join('/')
     }
     return p
-  }
+  })
+}
 
-  function transformAsset(asset: unknown): unknown {
-    if (!asset || typeof asset !== 'object' || Array.isArray(asset)) return asset
-    const a = asset as Record<string, unknown>
-    return {
-      ...a,
-      path: rel(a['path']),
-      bigThumbnailPath: rel(a['bigThumbnailPath']),
-      smallThumbnailPath: rel(a['smallThumbnailPath']),
-      thumbnail: rel(a['thumbnail']),
-      takes: Array.isArray(a['takes'])
-        ? a['takes'].map((take) => {
-            const t = take as Record<string, unknown>
-            return {
-              ...t,
-              path: rel(t['path']),
-              bigThumbnailPath: rel(t['bigThumbnailPath']),
-              smallThumbnailPath: rel(t['smallThumbnailPath']),
-              thumbnail: rel(t['thumbnail']),
-            }
-          })
-        : a['takes'],
+// ── Pre-bundle normalization ──────────────────────────────────────────────────
+
+/**
+ * Copy any project files that live outside assetsRoot into
+ * <assetsRoot>/<projectId>/imported/<sha1(absPath).slice(0,12)>/<basename>,
+ * then rewrite those fields in the project JSON and persist.
+ * Idempotent: files already inside assetsRoot or already copied are skipped.
+ */
+function normalizeExternalAssets(projectId: string): void {
+  const assetsRoot = getProjectAssetsPath()
+  const normalizedRoot = assetsRoot.endsWith(path.sep) ? assetsRoot : assetsRoot + path.sep
+  const project = getMcpProject(projectId)
+  let dirty = false
+
+  const normalized = mapProjectPaths(project, (p: unknown): unknown => {
+    if (typeof p !== 'string' || !p) return p
+    const lower = p.toLowerCase()
+    if (lower.startsWith('http') || lower.startsWith('blob:') || lower.startsWith('data:') || p.startsWith('assets/')) return p
+    const resolved = lower.startsWith('file://') ? new URL(p).pathname : p
+    if (resolved.startsWith(normalizedRoot)) return p
+    if (!fs.existsSync(resolved)) return p
+
+    const hash = crypto.createHash('sha1').update(resolved).digest('hex').slice(0, 12)
+    const basename = path.basename(resolved)
+    const importedDir = path.join(assetsRoot, projectId, 'imported', hash)
+    const destPath = path.join(importedDir, basename)
+
+    try {
+      const srcStat = fs.statSync(resolved)
+      try {
+        const destStat = fs.statSync(destPath)
+        if (destStat.size === srcStat.size) return destPath
+      } catch { /* dest doesn't exist yet */ }
+      fs.mkdirSync(importedDir, { recursive: true })
+      fs.copyFileSync(resolved, destPath)
+      dirty = true
+      return destPath
+    } catch (err) {
+      logger.warn(`[bundler] failed to copy external asset ${resolved}: ${err}`)
+      return p
     }
-  }
+  })
 
-  function transformTimelines(timelines: unknown): unknown {
-    if (!Array.isArray(timelines)) return timelines
-    return timelines.map((timeline) => {
-      if (!timeline || typeof timeline !== 'object') return timeline
-      const tl = timeline as Record<string, unknown>
-      return {
-        ...tl,
-        clips: Array.isArray(tl['clips'])
-          ? tl['clips'].map((clip) => {
-              if (!clip || typeof clip !== 'object') return clip
-              const c = clip as Record<string, unknown>
-              return { ...c, asset: c['asset'] ? transformAsset(c['asset']) : c['asset'] }
-            })
-          : tl['clips'],
-      }
-    })
-  }
-
-  return {
-    ...project,
-    assets: Array.isArray(project['assets']) ? project['assets'].map(transformAsset) : project['assets'],
-    timelines: transformTimelines(project['timelines']),
+  if (dirty) {
+    putMcpProject(projectId, normalized)
   }
 }
 
@@ -161,8 +128,9 @@ export interface TransferManifest {
   totalBytes: number
 }
 
-/** Build the transfer manifest for a project (no disk writes). */
+/** Build the transfer manifest for a project (no disk writes except normalization). */
 export function buildTransferManifest(projectId: string): TransferManifest {
+  normalizeExternalAssets(projectId)
   const project = getMcpProject(projectId)
   const assetsRoot = getProjectAssetsPath()
   const filePaths = collectProjectFilePaths(project, assetsRoot)

@@ -5,7 +5,7 @@ import os from 'os'
 import path from 'path'
 import { BrowserWindow } from 'electron'
 import { logger } from '../logger'
-import { putMcpProject, broadcast } from '../mcp-project-store'
+import { getMcpProject, putMcpProject, broadcast } from '../mcp-project-store'
 import { getProjectAssetsPath } from '../app-state'
 import { installProjectJson } from './project-extractor'
 import { findPairedByDeviceId } from './paired-devices'
@@ -160,13 +160,28 @@ export function downloadProject(
 
       const { projectJson, projectId: finalId } = installProjectJson(portableProject, overrides)
 
-      const result = putMcpProject(finalId, projectJson)
+      // Make the sync relationship bidirectional: ensure the sender's deviceId is
+      // in our local syncedWith so we notify them when we make subsequent changes.
+      const senderDeviceId = peer.id
+      let existingSyncedWith: string[] = []
+      try {
+        const localProject = getMcpProject(finalId)
+        existingSyncedWith = Array.isArray(localProject['syncedWith'])
+          ? (localProject['syncedWith'] as unknown[]).filter((x): x is string => typeof x === 'string')
+          : []
+      } catch { /* project doesn't exist locally yet */ }
+      const finalSyncedWith = existingSyncedWith.includes(senderDeviceId)
+        ? existingSyncedWith
+        : [...existingSyncedWith, senderDeviceId]
+      const finalProjectJson = { ...projectJson, syncedWith: finalSyncedWith }
+
+      const result = putMcpProject(finalId, finalProjectJson)
       if (result.status !== 'ok') throw new Error(`Failed to save project: status=${result.status}`)
 
       // Manually broadcast so the frontend's syncSingleProject fires.
       // source='remote-sync' so the sync-coordinator doesn't bounce this
       // change back out to the peer we just pulled it from.
-      const updatedAt = typeof projectJson['updatedAt'] === 'number' ? projectJson['updatedAt'] : Date.now()
+      const updatedAt = typeof finalProjectJson['updatedAt'] === 'number' ? finalProjectJson['updatedAt'] : Date.now()
       broadcast({ kind: 'updated', projectId: finalId, updatedAt, source: 'remote-sync' })
 
       emitProgress({ transferId, phase: 'complete', bytesReceived: totalBytes, totalBytes })

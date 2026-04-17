@@ -53,6 +53,7 @@ export interface SyncNotifyEvent {
   fromDeviceId: string
   projectId: string
   updatedAt: number
+  forceFullSync?: boolean
 }
 export interface PairedPeerOnlineEvent {
   deviceId: string
@@ -354,12 +355,13 @@ async function handleHttpRequest(req: http.IncomingMessage, res: http.ServerResp
     const rec = (body as Record<string, unknown>) ?? {}
     const projectId = typeof rec.projectId === 'string' ? rec.projectId : null
     const updatedAt = typeof rec.updatedAt === 'number' ? rec.updatedAt : 0
+    const forceFullSync = rec.forceFullSync === true
     if (!projectId) {
       res.writeHead(400, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ error: 'Missing projectId' }))
       return
     }
-    syncEvents.emit('notify', { fromDeviceId: auth.device.deviceId, projectId, updatedAt })
+    syncEvents.emit('notify', { fromDeviceId: auth.device.deviceId, projectId, updatedAt, forceFullSync })
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ ok: true }))
     return
@@ -706,12 +708,12 @@ export async function unpairDevice(targetDeviceId: string): Promise<{ ok: boolea
 }
 
 /** Send a notify to a paired peer that a project just changed. */
-export async function sendSyncNotify(targetDeviceId: string, projectId: string, updatedAt: number): Promise<boolean> {
+export async function sendSyncNotify(targetDeviceId: string, projectId: string, updatedAt: number, forceFullSync?: boolean): Promise<boolean> {
   const paired = findPairedByDeviceId(targetDeviceId)
   const peer = peers.get(targetDeviceId)
   if (!paired || !peer) return false
   try {
-    const body = Buffer.from(JSON.stringify({ projectId, updatedAt }))
+    const body = Buffer.from(JSON.stringify({ projectId, updatedAt, ...(forceFullSync ? { forceFullSync: true } : {}) }))
     await new Promise<void>((resolve, reject) => {
       const req = http.request({
         hostname: peer.address,
