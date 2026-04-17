@@ -1,4 +1,5 @@
 import { BrowserWindow } from 'electron'
+import { EventEmitter } from 'events'
 import fs, { type FSWatcher } from 'fs'
 import path from 'path'
 import { getAppDataDir } from './app-paths'
@@ -12,10 +13,14 @@ export interface McpProjectSummary {
   clipCount: number
 }
 
+export type McpProjectChangeSource = 'local' | 'remote-sync'
+
 export interface McpProjectChangeEvent {
   kind: 'updated' | 'deleted'
   projectId: string
   updatedAt?: number
+  /** Where the change originated. Defaults to 'local'. Used by sync-coordinator to avoid loops. */
+  source?: McpProjectChangeSource
 }
 
 export interface PutMcpProjectResult {
@@ -105,10 +110,22 @@ function takeSnapshot(): Map<string, number> {
   return snapshot
 }
 
+/** In-process listeners (main-side). Use for sync coordinator etc. */
+const mcpProjectEvents = new EventEmitter()
+mcpProjectEvents.setMaxListeners(50)
+
+export function onMcpProjectChange(listener: (event: McpProjectChangeEvent) => void): () => void {
+  mcpProjectEvents.on('change', listener)
+  return () => mcpProjectEvents.off('change', listener)
+}
+
 export function broadcast(change: McpProjectChangeEvent): void {
+  // Default source = 'local' (watcher-originated changes are always local)
+  const event: McpProjectChangeEvent = { source: 'local', ...change }
   for (const window of BrowserWindow.getAllWindows()) {
-    window.webContents.send(MCP_PROJECT_CHANGED_CHANNEL, change)
+    window.webContents.send(MCP_PROJECT_CHANGED_CHANNEL, event)
   }
+  mcpProjectEvents.emit('change', event)
 }
 
 function flushRescan(): void {

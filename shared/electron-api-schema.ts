@@ -430,6 +430,31 @@ export const electronAPISchemas = {
     input: z.object({}),
     output: z.void(),
   },
+  lanSyncPair: {
+    input: z.object({ peerId: z.string() }),
+    output: ipcResult({ deviceId: z.string(), deviceName: z.string() }),
+  },
+  lanSyncApprovePairing: {
+    input: z.object({ pairRequestId: z.string(), approved: z.boolean() }),
+    output: z.void(),
+  },
+  lanSyncUnpair: {
+    input: z.object({ deviceId: z.string() }),
+    output: ipcResult({}),
+  },
+  lanSyncListPaired: {
+    input: z.object({}),
+    output: z.array(z.object({
+      deviceId: z.string(),
+      deviceName: z.string(),
+      pairedAt: z.number(),
+      online: z.boolean(),
+    })),
+  },
+  lanSyncSetProjectSync: {
+    input: z.object({ projectId: z.string(), enabled: z.boolean() }),
+    output: ipcResult({}),
+  },
 } as const
 
 type Schemas = typeof electronAPISchemas
@@ -465,6 +490,20 @@ export interface LanSyncIncomingRequest {
   estimatedBytes: number
 }
 
+export interface LanPairedDevice {
+  deviceId: string
+  deviceName: string
+  pairedAt: number
+  online: boolean
+  peer?: LanSyncPeer | null
+}
+
+export interface LanPairingRequest {
+  pairRequestId: string
+  fromDeviceId: string
+  fromDeviceName: string
+}
+
 export type ElectronAPI = InvokeAPI & {
   onPythonSetupProgress: (cb: (data: unknown) => void) => void
   removePythonSetupProgress: () => void
@@ -475,6 +514,8 @@ export type ElectronAPI = InvokeAPI & {
   onLanSyncPeersChanged: (cb: (peers: LanSyncPeer[]) => void) => (() => void)
   onLanSyncProgress: (cb: (event: LanSyncProgressEvent) => void) => (() => void)
   onLanSyncIncomingRequest: (cb: (event: LanSyncIncomingRequest) => void) => (() => void)
+  onLanSyncPairingRequest: (cb: (event: LanPairingRequest) => void) => (() => void)
+  onLanSyncPairedDevicesChanged: (cb: (devices: LanPairedDevice[]) => void) => (() => void)
   getPathForFile: (file: File) => string
   platform: string
 }

@@ -1,11 +1,21 @@
 import { app } from 'electron'
+import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
+
+export interface PairedDevice {
+  deviceId: string
+  deviceName: string
+  pairToken: string
+  pairedAt: number
+}
 
 export interface AppState {
   analyticsEnabled?: boolean
   installationId?: string
   projectAssetsPath?: string
+  deviceId?: string
+  pairedDevices?: PairedDevice[]
   [key: string]: unknown
 }
 
@@ -49,4 +59,21 @@ export function setProjectAssetsPath(p: string): void {
   const state = readAppState()
   state.projectAssetsPath = resolvedPath
   writeAppState(state)
+}
+
+let cachedDeviceId: string | null = null
+
+/** Stable device identifier — generated once per install, persisted across runs. */
+export function getDeviceId(): string {
+  if (cachedDeviceId) return cachedDeviceId
+  const state = readAppState()
+  if (typeof state.deviceId === 'string' && state.deviceId) {
+    cachedDeviceId = state.deviceId
+    return cachedDeviceId
+  }
+  const generated = crypto.randomUUID()
+  state.deviceId = generated
+  writeAppState(state)
+  cachedDeviceId = generated
+  return generated
 }

@@ -4,8 +4,13 @@ import {
   setLanSyncEnabled,
   getKnownPeers,
   approveIncomingTransfer,
+  approvePairingRequest,
   refreshDiscovery,
+  pairWithPeer,
+  unpairDevice,
+  listPairedWithStatus,
 } from '../lan-sync/lan-sync-service'
+import { setProjectSyncEnabled } from '../lan-sync/sync-coordinator'
 import { downloadProject, cancelTransfer } from '../lan-sync/transfer-manager'
 
 export function registerLanSyncHandlers(): void {
@@ -48,5 +53,36 @@ export function registerLanSyncHandlers(): void {
 
   handle('lanSyncRefresh', () => {
     refreshDiscovery()
+  })
+
+  handle('lanSyncPair', async ({ peerId }) => {
+    const result = await pairWithPeer(peerId)
+    if (!result.ok) return { success: false as const, error: result.error }
+    return { success: true as const, deviceId: result.deviceId, deviceName: result.deviceName }
+  })
+
+  handle('lanSyncApprovePairing', ({ pairRequestId, approved }) => {
+    approvePairingRequest(pairRequestId, approved)
+  })
+
+  handle('lanSyncUnpair', async ({ deviceId }) => {
+    const result = await unpairDevice(deviceId)
+    if (!result.ok) return { success: false as const, error: result.error ?? 'Unknown error' }
+    return { success: true as const }
+  })
+
+  handle('lanSyncListPaired', () => {
+    return listPairedWithStatus().map((d) => ({
+      deviceId: d.deviceId,
+      deviceName: d.deviceName,
+      pairedAt: d.pairedAt,
+      online: d.online,
+    }))
+  })
+
+  handle('lanSyncSetProjectSync', ({ projectId, enabled }) => {
+    const result = setProjectSyncEnabled(projectId, enabled)
+    if (!result.ok) return { success: false as const, error: result.error ?? 'Unknown error' }
+    return { success: true as const }
   })
 }

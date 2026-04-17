@@ -1,17 +1,14 @@
-import archiver from 'archiver'
 import fs from 'fs'
 import path from 'path'
-import type { ServerResponse } from 'http'
 import { getProjectAssetsPath } from '../app-state'
 import { getMcpProject } from '../mcp-project-store'
-import { logger } from '../logger'
 
 // ── Path collection ───────────────────────────────────────────────────────────
 
 /**
  * Collect all unique absolute file paths referenced by the project.
  * Returns { absolutePath, relativePath } pairs for files under assetsRoot.
- * Files outside assetsRoot are returned with a null relativePath (cannot be bundled).
+ * Files outside assetsRoot are returned with a null relativePath (cannot be transferred).
  */
 export function collectProjectFilePaths(
   project: Record<string, unknown>,
@@ -22,10 +19,8 @@ export function collectProjectFilePaths(
 
   function addPath(p: unknown): void {
     if (typeof p !== 'string' || !p) return
-    // Skip URLs and blob references
     const lower = p.toLowerCase()
     if (lower.startsWith('http') || lower.startsWith('blob:') || lower.startsWith('data:')) return
-    // Normalise file:// URLs
     const resolved = lower.startsWith('file://') ? new URL(p).pathname : p
     if (seen.has(resolved)) return
     seen.add(resolved)
@@ -59,12 +54,10 @@ export function collectProjectFilePaths(
     }
   }
 
-  // Walk top-level assets array
   if (Array.isArray(project['assets'])) {
     for (const asset of project['assets']) walkAsset(asset)
   }
 
-  // Walk clips inside timelines (each clip carries a nested asset copy)
   if (Array.isArray(project['timelines'])) {
     for (const timeline of project['timelines']) {
       if (!timeline || typeof timeline !== 'object') continue
@@ -86,7 +79,7 @@ export function collectProjectFilePaths(
 
 /**
  * Deep-clone the project JSON, replacing every absolute path that starts with
- * assetsRoot with a relative "assets/..." path. Returns the modified clone.
+ * assetsRoot with a relative "assets/..." path.
  */
 export function relativizeProjectPaths(
   project: Record<string, unknown>,
@@ -140,10 +133,7 @@ export function relativizeProjectPaths(
           ? tl['clips'].map((clip) => {
               if (!clip || typeof clip !== 'object') return clip
               const c = clip as Record<string, unknown>
-              return {
-                ...c,
-                asset: c['asset'] ? transformAsset(c['asset']) : c['asset'],
-              }
+              return { ...c, asset: c['asset'] ? transformAsset(c['asset']) : c['asset'] }
             })
           : tl['clips'],
       }
@@ -157,66 +147,37 @@ export function relativizeProjectPaths(
   }
 }
 
-// ── Size estimation ───────────────────────────────────────────────────────────
+// ── Transfer manifest ─────────────────────────────────────────────────────────
 
-/** Sum of all asset file sizes — used for progress estimation (level-0 zip ≈ raw size). */
-export function estimateProjectSize(projectId: string): number {
-  const project = getMcpProject(projectId)
-  const assetsRoot = getProjectAssetsPath()
-  const filePaths = collectProjectFilePaths(project, assetsRoot)
-  let total = 0
-  for (const { absolutePath } of filePaths) {
-    try { total += fs.statSync(absolutePath).size } catch { /* skip */ }
-  }
-  return total
+export interface TransferFile {
+  rel: string       // relative path inside the bundle, e.g. "assets/proj-id/clip.mp4"
+  absolutePath: string
+  size: number
 }
 
-// ── Streaming bundle ──────────────────────────────────────────────────────────
+export interface TransferManifest {
+  project: Record<string, unknown>  // relativized project JSON
+  files: TransferFile[]
+  totalBytes: number
+}
 
-/**
- * Stream a project ZIP directly into an HTTP ServerResponse.
- * Uses compression level 0 — video files are already compressed; skipping
- * re-compression maximises throughput.
- */
-export async function streamProjectBundle(
-  projectId: string,
-  res: ServerResponse,
-  signal: AbortSignal,
-): Promise<void> {
+/** Build the transfer manifest for a project (no disk writes). */
+export function buildTransferManifest(projectId: string): TransferManifest {
   const project = getMcpProject(projectId)
   const assetsRoot = getProjectAssetsPath()
   const filePaths = collectProjectFilePaths(project, assetsRoot)
-
-  // Warn about files that can't be bundled
-  const unbundlable = filePaths.filter(f => f.relativePath === null)
-  if (unbundlable.length > 0) {
-    logger.warn(`[LAN Sync] ${unbundlable.length} asset(s) outside assetsRoot — skipping: ${unbundlable.map(f => f.absolutePath).join(', ')}`)
-  }
-
   const portable = relativizeProjectPaths(project, assetsRoot)
 
-  const archive = archiver('zip', { zlib: { level: 0 } })
-
-  // Abort support
-  const abortHandler = () => archive.abort()
-  signal.addEventListener('abort', abortHandler)
-
-  archive.pipe(res)
-
-  // Add the portable project manifest
-  archive.append(JSON.stringify(portable, null, 2), { name: 'project.json' })
-
-  // Add each asset file with its relative path inside the archive
+  const files: TransferFile[] = []
+  let totalBytes = 0
   for (const { absolutePath, relativePath } of filePaths) {
     if (!relativePath) continue
-    archive.file(absolutePath, { name: relativePath })
+    try {
+      const size = fs.statSync(absolutePath).size
+      files.push({ rel: relativePath, absolutePath, size })
+      totalBytes += size
+    } catch { /* skip missing files */ }
   }
 
-  await new Promise<void>((resolve, reject) => {
-    archive.on('finish', resolve)
-    archive.on('error', reject)
-    archive.finalize().catch(reject)
-  })
-
-  signal.removeEventListener('abort', abortHandler)
+  return { project: portable, files, totalBytes }
 }

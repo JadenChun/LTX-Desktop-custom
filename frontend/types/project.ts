@@ -501,6 +501,8 @@ export interface Project {
   mcpLastUpdatedAt?: number
   // When present, indicates this project is a local backup created before overwriting from MCP sync.
   backupOfProjectId?: string
+  // Device IDs of paired peers this project syncs with. Empty/undefined = not synced.
+  syncedWith?: string[]
 }
 
 export type ViewType = 'home' | 'project' | 'playground'
