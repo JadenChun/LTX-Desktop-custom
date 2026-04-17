@@ -143,7 +143,12 @@ function sendBeacon(): void {
     JSON.stringify({ type: 'ltx-announce', deviceId, deviceName, port: httpPort, token: sessionToken, v: 1 }),
   )
   udpSocket.send(payload, BEACON_PORT, MULTICAST_GROUP, (err) => {
-    if (err) logger.warn(`[LAN Sync] beacon send error: ${err.message}`)
+    if (err) logger.warn(`[LAN Sync] beacon multicast send error: ${err.message}`)
+  })
+  // Also broadcast so devices on the same subnet can discover each other even
+  // when the router doesn't forward multicast between WiFi clients.
+  udpSocket.send(payload, BEACON_PORT, '255.255.255.255', (err) => {
+    if (err) logger.warn(`[LAN Sync] beacon broadcast send error: ${err.message}`)
   })
 }
 
@@ -487,6 +492,7 @@ function startUdpSocket(): Promise<void> {
         const wasOffline = !existing
         peers.set(peerId, peer)
         if (changed || !existing) {
+          logger.info(`[LAN Sync] peer discovered: ${peer.deviceName} (${rinfo.address}:${peer.port})`)
           broadcastPeersChanged()
           // If this peer is paired, also notify the paired list so online status updates
           if (findPairedByDeviceId(peerId)) {
@@ -502,6 +508,13 @@ function startUdpSocket(): Promise<void> {
         socket.addMembership(MULTICAST_GROUP)
         socket.setMulticastTTL(4)
         socket.setBroadcast(true)
+        // Pin the outgoing multicast interface to the actual LAN IP so that
+        // packets go out on the right adapter (not a VPN or virtual interface).
+        const localIp = getLocalIp()
+        if (localIp !== '127.0.0.1') {
+          socket.setMulticastInterface(localIp)
+        }
+        logger.info(`[LAN Sync] UDP socket bound on port ${BEACON_PORT}, local IP ${localIp}`)
       } catch (err) {
         logger.warn(`[LAN Sync] multicast setup warning: ${err}`)
       }
