@@ -110,12 +110,20 @@ export function LanSyncModal({ peer, onClose }: LanSyncModalProps) {
           )}
 
           {remoteProjects?.map(project => {
+            const transferId = projectTransfers.get(project.id)
             const transfer = getTransferForProject(project.id)
             const localExists = projects.some(p => p.id === project.id)
             const resolution = resolutions.get(project.id) ?? 'replace'
+
+            // Three distinct pending states:
+            // awaiting  — startTransfer called, no progress event yet (waiting for sender approval)
+            // active    — downloading or extracting
+            // done/error — terminal states
+            const isAwaiting = !!transferId && !transfer
             const isActive = !!transfer && transfer.phase !== 'complete' && transfer.phase !== 'error'
             const isDone = transfer?.phase === 'complete'
             const isError = transfer?.phase === 'error'
+            const isBusy = isAwaiting || isActive
 
             const progressPct = transfer && transfer.totalBytes > 0
               ? Math.round((transfer.bytesReceived / transfer.totalBytes) * 100)
@@ -145,7 +153,7 @@ export function LanSyncModal({ peer, onClose }: LanSyncModalProps) {
                       Failed
                     </div>
                   )}
-                  {isActive && (
+                  {isBusy && (
                     <button
                       onClick={() => handleCancel(project.id)}
                       className="text-xs text-zinc-400 hover:text-white transition-colors flex-shrink-0"
@@ -153,7 +161,7 @@ export function LanSyncModal({ peer, onClose }: LanSyncModalProps) {
                       Cancel
                     </button>
                   )}
-                  {!isActive && !isDone && (
+                  {!isBusy && !isDone && (
                     <Button
                       onClick={() => handlePull(project)}
                       className="bg-blue-600 hover:bg-blue-500 h-8 px-3 text-xs flex-shrink-0"
@@ -164,8 +172,8 @@ export function LanSyncModal({ peer, onClose }: LanSyncModalProps) {
                   )}
                 </div>
 
-                {/* Conflict resolution selector */}
-                {localExists && !isActive && !isDone && (
+                {/* Conflict resolution selector — only when idle */}
+                {localExists && !isBusy && !isDone && (
                   <div className="flex items-center gap-2 text-xs">
                     <span className="text-zinc-500">Already on this device:</span>
                     <select
@@ -179,7 +187,15 @@ export function LanSyncModal({ peer, onClose }: LanSyncModalProps) {
                   </div>
                 )}
 
-                {/* Progress bar */}
+                {/* Waiting for sender approval */}
+                {isAwaiting && (
+                  <div className="flex items-center gap-2 text-xs text-zinc-400">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin flex-shrink-0" />
+                    <span>Waiting for sender to approve…</span>
+                  </div>
+                )}
+
+                {/* Download progress bar */}
                 {isActive && (
                   <div className="space-y-1">
                     <div className="flex justify-between text-xs text-zinc-500">
@@ -209,7 +225,7 @@ export function LanSyncModal({ peer, onClose }: LanSyncModalProps) {
         {/* Footer hint */}
         <div className="px-5 py-3 border-t border-zinc-800">
           <p className="text-xs text-zinc-600">
-            Both devices must approve the transfer. The sender will see a confirmation dialog.
+            Paired devices are approved automatically. Enable "Auto-approve transfers" in the sidebar to skip the dialog for unpaired devices too.
           </p>
         </div>
       </div>

@@ -2,6 +2,8 @@ import { handle } from './typed-handle'
 import {
   getLanSyncStatus,
   setLanSyncEnabled,
+  getLanSyncAutoApprove,
+  setLanSyncAutoApprove,
   getKnownPeers,
   approveIncomingTransfer,
   approvePairingRequest,
@@ -81,7 +83,14 @@ export function registerLanSyncHandlers(): void {
       deviceName: d.deviceName,
       pairedAt: d.pairedAt,
       online: d.online,
+      peer: d.peer ?? null,
     }))
+  })
+
+  handle('lanSyncGetAutoApprove', () => ({ autoApprove: getLanSyncAutoApprove() }))
+
+  handle('lanSyncSetAutoApprove', ({ autoApprove }) => {
+    setLanSyncAutoApprove(autoApprove)
   })
 
   handle('lanSyncSetProjectSync', ({ projectId, enabled }) => {

@@ -460,11 +460,27 @@ export const electronAPISchemas = {
       deviceName: z.string(),
       pairedAt: z.number(),
       online: z.boolean(),
+      peer: z.object({
+        id: z.string(),
+        deviceName: z.string(),
+        address: z.string(),
+        port: z.number(),
+        lastSeen: z.number(),
+        token: z.string(),
+      }).nullable(),
     })),
   },
   lanSyncSetProjectSync: {
     input: z.object({ projectId: z.string(), enabled: z.boolean() }),
     output: ipcResult({}),
+  },
+  lanSyncGetAutoApprove: {
+    input: z.object({}),
+    output: z.object({ autoApprove: z.boolean() }),
+  },
+  lanSyncSetAutoApprove: {
+    input: z.object({ autoApprove: z.boolean() }),
+    output: z.void(),
   },
 } as const
 

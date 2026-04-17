@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Plus, Folder, MoreVertical, Trash2, Pencil, Settings, Wifi, RefreshCw, Link2, Link2Off } from 'lucide-react'
+import { Plus, Folder, MoreVertical, Trash2, Pencil, Settings, Wifi, RefreshCw, Link2, Link2Off, Download } from 'lucide-react'
 import { useProjects } from '../contexts/ProjectContext'
 import { LtxLogo } from '../components/LtxLogo'
 import { Button } from '../components/ui/button'
@@ -135,10 +135,12 @@ export function Home() {
     pairedDevices,
     pairingRequest,
     enabled,
+    autoApprove,
     refresh,
     pairDevice,
     approvePairing,
     unpairDevice,
+    setAutoApprove,
   } = useLanSync()
   const [selectedPeer, setSelectedPeer] = useState<LanSyncPeer | null>(null)
   const [pairingInFlight, setPairingInFlight] = useState<string | null>(null)
@@ -242,7 +244,17 @@ export function Home() {
                   <span
                     className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${device.online ? 'bg-green-500' : 'bg-zinc-600'}`}
                   />
-                  <span className="truncate flex-1" title={device.deviceName}>{device.deviceName}</span>
+                  {device.online && device.peer ? (
+                    <button
+                      onClick={() => setSelectedPeer(device.peer!)}
+                      className="truncate flex-1 text-left hover:text-white transition-colors"
+                      title={`${device.deviceName} — click to browse projects`}
+                    >
+                      {device.deviceName}
+                    </button>
+                  ) : (
+                    <span className="truncate flex-1 text-zinc-500" title={device.deviceName}>{device.deviceName}</span>
+                  )}
                   <button
                     onClick={(e) => {
                       e.stopPropagation()
@@ -253,7 +265,16 @@ export function Home() {
                     <MoreVertical className="h-3.5 w-3.5" />
                   </button>
                   {pairedMenuOpen === device.deviceId && (
-                    <div className="absolute right-2 top-9 bg-zinc-800 rounded-lg shadow-lg border border-zinc-700 py-1 z-10 min-w-[120px]">
+                    <div className="absolute right-2 top-9 bg-zinc-800 rounded-lg shadow-lg border border-zinc-700 py-1 z-10 min-w-[140px]">
+                      {device.online && device.peer && (
+                        <button
+                          onClick={() => { setPairedMenuOpen(null); setSelectedPeer(device.peer!) }}
+                          className="w-full px-3 py-2 text-left text-xs text-zinc-300 hover:bg-zinc-700 flex items-center gap-2"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                          Browse &amp; Sync
+                        </button>
+                      )}
                       <button
                         onClick={() => handleUnpair(device.deviceId)}
                         className="w-full px-3 py-2 text-left text-xs text-red-400 hover:bg-zinc-700 flex items-center gap-2"
@@ -284,6 +305,15 @@ export function Home() {
                 </button>
               )}
             </div>
+            <label className="flex items-center gap-2 px-3 py-1 cursor-pointer select-none group" title="Skip the approval dialog for any incoming pull request">
+              <div
+                onClick={() => setAutoApprove(!autoApprove)}
+                className={`relative w-7 h-4 rounded-full transition-colors flex-shrink-0 ${autoApprove ? 'bg-blue-600' : 'bg-zinc-700'}`}
+              >
+                <span className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white transition-transform ${autoApprove ? 'translate-x-3' : 'translate-x-0'}`} />
+              </div>
+              <span className="text-xs text-zinc-500 group-hover:text-zinc-400 transition-colors">Auto-approve transfers</span>
+            </label>
             {!enabled ? (
               <p className="px-3 text-xs text-zinc-600">Disabled in Settings</p>
             ) : unpairedPeers.length === 0 ? (

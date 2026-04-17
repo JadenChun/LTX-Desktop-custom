@@ -13,11 +13,16 @@ export function useLanSync() {
   const [pairedDevices, setPairedDevices] = useState<LanPairedDevice[]>([])
   const [pairingRequest, setPairingRequest] = useState<LanPairingRequest | null>(null)
   const [enabled, setEnabled] = useState(true)
+  const [autoApprove, setAutoApproveState] = useState(false)
   const [activeTransfers, setActiveTransfers] = useState<Map<string, LanSyncProgressEvent>>(new Map())
 
   useEffect(() => {
     window.electronAPI.lanSyncGetStatus().then(status => {
       setEnabled(status.enabled)
+    }).catch(() => {})
+
+    window.electronAPI.lanSyncGetAutoApprove().then(({ autoApprove }) => {
+      setAutoApproveState(autoApprove)
     }).catch(() => {})
 
     window.electronAPI.lanSyncListPaired().then(list => {
@@ -70,6 +75,11 @@ export function useLanSync() {
     window.electronAPI.lanSyncSetEnabled({ enabled: value }).catch(() => {})
   }, [])
 
+  const setAutoApprove = useCallback((value: boolean) => {
+    setAutoApproveState(value)
+    window.electronAPI.lanSyncSetAutoApprove({ autoApprove: value }).catch(() => {})
+  }, [])
+
   const listRemoteProjects = useCallback((peerId: string) => {
     return window.electronAPI.lanSyncListRemoteProjects({ peerId })
   }, [])
@@ -117,8 +127,10 @@ export function useLanSync() {
     pairedDevices,
     pairingRequest,
     enabled,
+    autoApprove,
     activeTransfers,
     toggleEnabled,
+    setAutoApprove,
     listRemoteProjects,
     startTransfer,
     cancelTransfer,

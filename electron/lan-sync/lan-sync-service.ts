@@ -30,6 +30,7 @@ const PEER_TIMEOUT_MS = 12000 // 4 missed beacons → evict
 
 // ── Module state ──────────────────────────────────────────────────────────────
 let enabled = true
+let autoApproveTransfers = false
 let deviceId = '' // set during startLanSync
 const deviceName = os.hostname()
 const sessionToken = crypto.randomBytes(24).toString('base64url')
@@ -212,8 +213,8 @@ async function handleHttpRequest(req: http.IncomingMessage, res: http.ServerResp
       return
     }
 
-    // Paired callers skip the approval gate — they're pre-authorized.
-    let approved = auth.type === 'paired'
+    // Paired callers and auto-approve mode skip the dialog.
+    let approved = auth.type === 'paired' || autoApproveTransfers
 
     if (!approved) {
       // Look up project name for the approval dialog
@@ -556,6 +557,14 @@ export function stopLanSync(): void {
 
 export function getLanSyncStatus(): { enabled: boolean; deviceName: string; port: number | null } {
   return { enabled, deviceName, port: httpPort }
+}
+
+export function getLanSyncAutoApprove(): boolean {
+  return autoApproveTransfers
+}
+
+export function setLanSyncAutoApprove(value: boolean): void {
+  autoApproveTransfers = value
 }
 
 export function setLanSyncEnabled(value: boolean): void {
