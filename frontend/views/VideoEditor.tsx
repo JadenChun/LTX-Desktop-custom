@@ -22,9 +22,7 @@ import {
   loadLayout, saveLayout,
 } from './editor/video-editor-utils'
 import { createInitialEditorState } from './editor/editor-state'
-import {
-  applyPendingClipTakeUpdate,
-} from './editor/editor-actions'
+import { applyPendingClipTakeUpdate } from './editor/editor-actions'
 import { getEditorModel, updatedProject } from './editor/editor-project-bridging'
 import {
   selectActiveFocusArea,
@@ -181,6 +179,7 @@ export function VideoEditor(props: VideoEditorProps) {
 
   useEffect(() => {
     const currentState = editorStore.getState().state
+    if (currentState.projectSync.dirty) return
     const nextEditorModel = getEditorModel(currentProject)
     if (areEditorModelsEquivalent(nextEditorModel, currentState.editorModel)) return
 
@@ -518,12 +517,13 @@ function VideoEditorWithStore({
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
     autoSaveTimerRef.current = setTimeout(() => {
       setCurrentProject(updatedProject(currentProjectRef.current, editorModelRef.current))
+      actions.clearProjectDirty()
     }, AUTOSAVE_DELAY)
 
     return () => {
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
     }
-  }, [editorModel, setCurrentProject])
+  }, [actions, editorModel, setCurrentProject])
 
   useEffect(() => {
     return () => {
