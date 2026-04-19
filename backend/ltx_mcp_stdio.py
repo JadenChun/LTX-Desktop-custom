@@ -10,6 +10,8 @@ import sys
 import torch
 
 from app_data_dir import resolve_app_data_dir
+from state.app_settings import AppSettings
+from state import build_initial_state
 from app_handler import build_default_service_bundle
 from mcp_server import create_mcp_server
 from runtime_config.model_download_specs import (
@@ -19,8 +21,6 @@ from runtime_config.model_download_specs import (
 from runtime_config.runtime_config import RuntimeConfig
 from runtime_config.runtime_policy import decide_force_api_generations
 from services.gpu_info.gpu_info_impl import GpuInfoImpl
-from state.app_settings import AppSettings
-from state import build_initial_state
 
 logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler(sys.stderr)])
 logger = logging.getLogger(__name__)
